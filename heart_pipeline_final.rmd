@@ -225,7 +225,7 @@ just_form_hr_stat4 = just_form_hr_stat4 %>%
 ```{r apply exclusion criteria}
 
 # change these variables to customize inclusion criteria
-filter_date_start = mdy("01-01-2019")
+filter_date_start = mdy("10-18-2018")
 filter_date_end = mdy("12-31-2022")
 include_multi_organ_recipients = TRUE
 
@@ -1306,7 +1306,6 @@ paste0('Percent Transplanted: ',
        round(100 * (length(unique(df$PX_ID[df$transplant == 1])) / length(unique(df$PX_ID))), 2))
 
 ```
-
 ```{r, warning=F, comment=NA, message=F}
 
 
@@ -1316,7 +1315,8 @@ df = df %>% mutate(
 )
 
 
-df = df %>% filter(transplant <= 1 & t_start != t_stop)
+df = df %>% filter(transplant <= 1 & t_start != t_stop) %>% 
+  ungroup()
 
 
 ```
@@ -1328,6 +1328,7 @@ df = df %>% filter(transplant <= 1 & t_start != t_stop)
 # Examine the single case: dropped in our dataset since no time available (same day)
 ```{r, warning=F, comment=NA, message=F}
 df %>% filter(t_stop == 0)
+df %>% select(PX_ID, CAN_VAD1, CAN_VAD2, CAN_VAD_TY)
 ```
 
 # Adjust status, diagnosis, and device variables
@@ -1360,8 +1361,8 @@ df$status_initial = recode_factor(df$CAN_INIT_STAT,
 
 
 ###################################
+df = df %>% fill(status, .direction = "down")
 
-df = df %>% fill(status, CAN_VAD1, CAN_VAD2, CAN_VAD_TY, .direction = "down")
 ## Diagnosis, diabetes, and dialysis
 
 
@@ -1394,11 +1395,12 @@ df = df %>% mutate(
 
 
 ## LVAD, RVAD, BiVAD
+
+
 durable_lvad_types = c('202', '205', '206', '207', '208', '209', '210', 
                         '212', '213', '214', '223', '224', '233', '236', 
                         '239', '240', '312', '313', '314', '315', '316', '319', '322', 
                         '327', '330', '333', '334')
-
 
 
 df = df %>% mutate(
@@ -1428,13 +1430,12 @@ df = df %>% mutate(
  TRUE ~ 0))
 
 
-
 df = df %>% select(-c(JustId,
                        start_date, death_date_max, transplant_date,
                        removal_date, removal_code_cand_thor, death_date, 
 
-                       CAN_AGE_IN_MONTHS_AT_LISTING, CAN_INIT_STAT,
-                       CAN_VAD_TY, CAN_VAD1, CAN_VAD2, BivadPlacement, starts_with("Criteria")))
+                       CAN_AGE_IN_MONTHS_AT_LISTING, CAN_INIT_STAT, CAN_VAD_TY, CAN_VAD1, CAN_VAD2, BivadPlacement, starts_with("Criteria")))
+
 
 ```
 
@@ -1457,19 +1458,36 @@ df$sodium[df$sodium < 100] = NA
 ```
 
 ```{r}
+#Short term MCS variables
+df = df %>% mutate(
+   BiVAD_no_discharge = case_when(
+     status_criteria == "CriteriaBivadSupport" ~ 1, 
+     TRUE ~ 0),
+    
+    temp_surg_LVAD = case_when(
+      status_criteria == "CriteriaLvadSupport.stat2" ~ 1, 
+      TRUE ~ 0),
+   ECMO = case_when(
+      (status_criteria == "CriteriaEcmoSupport"| status_criteria == "CriteriaVaEcmoSupport" | EcmoWithHemo == 1 | EcmoWithoutHemo == 1 | grepl("EcmoCapWedgePressure", unique_event) == TRUE | grepl("EcmoCardiacIndex", unique_event) == TRUE | grepl("EcmoSystolicBloodPressure", unique_event) == TRUE | grepl("EcmoWithoutHemoAlt", unique_event) == TRUE | grepl("EcmoWithoutHemoAltLac", unique_event) == TRUE | grepl("EcmoWithoutHemoAst", unique_event) == TRUE | grepl("EcmoWithoutHemoCpr", unique_event) == TRUE | grepl("EcmoWithoutHemoSbp", unique_event) == TRUE) ~ 1,
+      TRUE ~ 0)
+)
+```
+
+
+```{r}
 # Check that all statuses have their associated justification criteria
 df %>% group_by(PX_ID) %>% filter(all(is.na(status_criteria)) & Exception == 0 & max(as.numeric(status)) < 5) %>% select(status, status_criteria)
+
 ```
 
 
 # Select variables for final dataframe
 ```{r}
-df = df %>% select(PX_ID, CAN_LISTING_CTR_CD, unique_event, unique_date, t_start, t_stop, status, status_criteria, Exception, transplant, outcome, age_at_listing, systolicBP, PCWP, PASP, PADP, resting_HR, diastolicBP, central_venous_pressure, cardiac_output, arterial_lactate, AST, creatinine, bilirubin, albumin, sodium, BNP, HemoHemoglobin, LDH, BUN, INR, CAN_REM_CD, diagnosis, diabetes, dialysis, CAN_PERIPH_VASC, durable_LVAD, RVAD, BiVAD, BNP_NT_Pro, last_active_date, last_inactive_date,  transplant_time, death_time, removal_time, status_initial)
+df = df %>% select(PX_ID, CAN_LISTING_CTR_CD, unique_event, unique_date, t_start, t_stop, status_criteria, status, Exception, transplant, outcome, age_at_listing, systolicBP, PCWP, PASP, PADP, resting_HR, diastolicBP, central_venous_pressure, cardiac_output, arterial_lactate, AST, creatinine, bilirubin, albumin, sodium, BNP, HemoHemoglobin, LDH, BUN, INR, CAN_REM_CD, diagnosis, diabetes, dialysis, CAN_PERIPH_VASC, ECMO, temp_surg_LVAD, BiVAD_no_discharge, durable_LVAD, RVAD, BiVAD, BNP_NT_Pro, last_active_date, last_inactive_date,  transplant_time, death_time, removal_time, status_initial)
 
 
 save(df, file = "heart_post_policy.RData")
 View(df)
-df
 
 
 ```
