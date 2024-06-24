@@ -1,0 +1,101 @@
+---
+title: "Marginal structural model of pretransplant mortality"
+subtitle: "US-CRS Version 2.0"
+author: "Grace Lyden"
+output: word_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+**Aim:**
+
+Fit a marginal structural model of pretransplant mortality within six weeks for adult heart candidates.
+
+**Summary of approach:**
+
+Medical acuity scores aim to represent a patient’s probability of survival in a world without transplant. To mimic this hypothetical world in our observed data, candidates are censored at the time of transplant. This censoring can be informative, however, because candidates who receive transplant are likely to be sicker at the time of transplant than candidates with the same baseline covariates who did not receive transplant.
+
+A marginal structural model aims to reweight the distribution of time-varying confounders at each timepoint when a candidate might receive transplant, so that the weighted data represent a “pseudopopulation” from the world without transplant, instead of the censored population from the real world.
+
+### Step 1: Estimate time-varying probability of transplant (for the weights)
+
+To fit a marginal structural model, we first have to estimate the time-varying probability of transplant, given that a patient is still alive and at risk (ie, the cause-specific hazard of transplant). We will do this in 1-week intervals, for computational efficiency. (We could also try doing it in days but that might run into memory issues...)
+
+So, the first step is to create a counting-process dataset with the unit of 1 week, from listing through transplant, death, or waitlist removal for other reasons. Patient covariates will be updated at the beginning of each week, carrying forward the most-recent nonmissing value. The outcome will =1 if the patient receives transplant within the week. The outcome =0 if the patient is still waiting for transplant at the end of the week. If, within the week, the patient dies before receiving transplant or is removed from the waitlist before receiving transplant, the outcome also =0. There are no more rows for a patient after the week of transplant, death, or waitlist removal for other reasons.
+
+Once we have the counting-process dataset, we will fit a logistic regression model (including all of the predictors from US-CRS 1.0 and any other proposed confounders of transplant and death) on this dataset where the outcome is transplant within the week. Note: There is no reason this has to be a logistic regression; we could use any statistical method for a binary outcome that can produce predicted probabilities. But if the logistic regression produces good covariate balance, then there’s no reason to use anything fancier. When sample size allows, I like to fit a flexible model with splines for continuous predictors. A good option is natural cubic splines with 4 knots, which you can specify in R with code like this:
+
+```{r,eval=F}
+library(splines)
+glm(outcome ~ categorical_predictor1 + categorical _predictor2 + ns(continuous_predictor1, df=3) + ns(continuous_predictor2, df=3),family=binomial)
+```
+
+Once we have the transplant probability model, we need to get the fitted probability of transplant for each row of the counting-process dataset. Then, we check how well this “propensity score” balances confounders between the transplanted and the not-transplanted. To check covariate balance:
+
+1.	Calculate a weight for each row of the dataset = 1 / Pr(observed outcome). Pr(observed outcome) is the fitted probability of having the observed outcome at that timepoint, for that set of covariates. So, if the person got a transplant at the end of the week, this is the fitted probability of transplant. If the person did not get a transplant during that week, it is the fitted probability of not getting a transplant, or 1 – fitted probability of transplant.
+
+2.	Create a Table 1 for the counting-process dataset which summarizes all of the confounders and stratifies by transplant=1 versus transplant=0. People will contribute to both columns if they start with transplant=0 but transition into transplant=1; this is totally fine. Get the standardized mean difference (SMD) between transplant=1 and transplant=0 for this unweighted comparison. You can do this using the tableone package in R: https://cran.r-project.org/web/packages/tableone/vignettes/smd.html
+
+3.	Create a weighted Table 1 with SMDs – so the exact same thing as (2) but applying the weights calculated in (1). We’re looking to have smaller SMDs (proposed threshold: 0.1) between transplanted and not-transplanted after weighting. The smaller the SMDs, the better the covariate balance.
+
+### Marginal structural model theory
+
+Some notation: Let $D_{ij}$ be an indicator that person $i$ died by the end of time interval $j$, which for this analysis is week $j$, starting with $j=1$. Let $A_{ij}$ be an indicator that person $i$ received transplant during week $j$. Let $L_{ij}$ be a vector of all covariates measured at the start of week $j$ that predict both transplant and death; these are the confounders included in the weight model from Step 1. So the data at time $j$ have a temporal order of $L_{ij}$, $A_{ij}$, $D_{ij}$. So far, we have built models to estimate:
+
+$$
+\begin{equation}
+Pr(A_{ij}=1 \vert \bar{L}_{ij}, \bar{A}_{i,j-1}=0, \bar{D}_{i,j-1}=0)
+\end{equation}
+$$
+
+where the bar notation denotes the history of the variable. That is, we have modeled the probability of transplant during week $j$, among people who are alive and still waiting at the start of the week, given confounders in $L$. Note that it's possible only $L_{ij}$ is needed, not the full $\bar{L}_{ij}$. We modeled this probability by logistic regression. This is technically a discrete survival model for the cause-specific hazard of transplant, or a "pooled logistic regression".
+
+Our goal is to predict the probability of death without transplant within the next six weeks, conditional on covariates $X_{i1}$ which are measured at the start of this six-week period. These are the covariates in the allocation risk score. These could be a subset of $L_{i1}$, or could include additional variables not in $L$ that are predictive of death but not transplant. We can also include interactions in $X$, as we've discussed.
+
+Ultimately, we want to be able to predict the probability of death within the next six weeks from any given starting point, not just from listing. But for now, pretend we just want to estimate the probability of death without transplant within six weeks of listing. The probability of surviving to the end of six weeks without transplant is:
+
+$$
+\begin{equation}
+Pr(D_{i6}^{\bar{A}_{i6}=0}=0\vert X_{i1}) = \prod_{j=1}^6 \Big\{1 - Pr(D_{ij}^{\bar{A}_{ij}=0}=1\vert \bar{D}_{i,j-1}^{\bar{A}_{i,j-1}=0}=0, X_{i1})  \Big\}
+\end{equation}
+$$
+The superscript denotes that this is a counterfactual: $D_{i6}^{\bar{A}_{i6}=0}$ is an indicator of death by the end of week 6 if the patient *were to receive no transplant* for all six weeks, for example in a hypothetical (unethical) trial with a "no-transplant" arm.
+
+We will fit a model for the discrete-time hazard, $Pr(D_{ij}^{\bar{A}_{ij}=0}=1\vert \bar{D}_{i,j-1}^{\bar{A}_{i,j-1}=0}=0, X_{i1})$, and use the expression above to calculate the six-week survival probability.
+
+Of course, we only have real data, not counterfactual data. But, under certain causal assumptions (ie, no unmeasured confounders of transplant and death, and everyone has some probability of *not* receiving a transplant in a given week), we can consistently estimate the counterfactual probability by fitting a marginal structural model. The marginal structural model will estimate a discrete-time hazard of death among patients who have not yet received transplant: 
+
+$$
+\begin{equation}
+Pr(D_{ij}=1 \vert \bar{A}_{ij}=0, \bar{D}_{i,j-1}=0, X_{i1})
+\end{equation}
+$$
+
+and the marginal structural model incorporates inverse probability weights at each week $j$:
+
+$$
+\begin{equation}
+\frac{1}{\prod_{k=1}^j Pr(A_{ik}=0\vert \bar{L}_{ik}, \bar{A}_{i,k-1}=0, \bar{D}_{i,k-1}=0)}
+\end{equation}
+$$
+
+That is, the patient's data for each week from $j=1$ to $j=6$ gets inversely weighted by the cumulative product of the probability of not receiving a transplant.
+
+We can specify this marginal structural model in R by fitting a weighted pooled logistic regression for death with `glm`, though again, we could consider methods other than logistic regression. Our next goal is to create the expanded dataset to fit this mortality model and calculate the weights in the expanded data, then look at the distribution of the weights. We might have to stabilize or truncate the weights to reduce variance.
+
+**A few things to note:**
+
+  - For the mortality model, we will remove rows in which a patient receives transplant, where $A_{ij}=1$. These rows were included in the transplant model but will not be included in the mortality model.
+  
+  - Note that $X_{i1}$ is measured at the start of the six weeks, but we incorporate time-varying covariates within the six-week period ($L_{ij}$, for $j>1$) to calculate the probability of transplant and the weights. So when we expand the dataset for the mortality model, we will need to carry forward the covariates in $X$ from the start of the six weeks but also have time-varying covariates available (eg, a column for the baseline value and also a column that varies each week).
+
+  - For the mortality model, we also want to include weeks after removal. After removal, there is no probability of transplant, so that week's contribution to the cumulative probability in the weights is just 1.
+
+**Including weeks after listing**
+
+We don't want to limit our analysis to the six weeks after listing. We also want to make predictions of six-week mortality starting at timepoints *after* listing. I think this should be a pretty straightforward extension of the above, though the programming could be a little tricky.
+
+Basically, for each patient, we want to have "landmarks" at every two weeks after listing and start a new six-week follow-up at each landmark. These six-week periods will be overlapping. For each landmark, there should be a row for each week after that landmark until transplant, death, or censoring, up to six possible rows. The weights will be based on the time-varying covariates at the start of each week. $X$, the covariates in the mortality model, should be measured *at* the landmark timepoint and carried forward into each week of the up-to-six-week period.
+
+We should be able to create this mortality-model dataset directly from the transplant-model dataset, by duplicating rows to create the six weeks of follow-up (or fewer) for each landmark time and adding new rows for the weeks after removal, again out to six weeks from the last landmark time. We will also have to create columns (for $X$) that carry forward covariate values from each landmark time for the up-to-six weeks of follow-up.
