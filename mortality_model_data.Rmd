@@ -1,0 +1,228 @@
+---
+title: "mortality_model_dataset"
+output: html_document
+date: "2024-06-24"
+---
+
+## Load data and libraries
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list=ls())
+setwd("C:/Users/mhwhi/Downloads")
+load("discrete_final_data.RData")
+library(dplyr)
+library(splines)
+library(tidyr)
+```
+
+# Split data into training / testing sets
+```{r}
+set.seed(123)
+center_ids_train <- sample(x = unique(df_final$CAN_LISTING_CTR_CD), 
+                           size = ceiling(0.7*length(unique(df_final$CAN_LISTING_CTR_CD))), 
+                           replace = F)
+df_final$train_test <-  'Test'
+df_final$train_test[df_final$CAN_LISTING_CTR_CD %in% center_ids_train] <- 'Train'
+
+train_data = df_final %>% filter(train_test == 'Train')
+
+train_data
+```
+
+
+## Create week variable
+```{r cars}
+train_data = train_data %>% 
+  mutate(
+  week = interval_start / 7 + 1
+) %>% relocate(week, .after = CAN_LISTING_CTR_CD)
+
+```
+# Create duplicate observations for each landmark
+```{r pressure, echo=FALSE}
+# First 4 weeks don't have 3 landmarks, so they have fewer duplicates
+train_data = train_data %>% mutate(
+  duplicate_amount = case_when(
+    week %in% c(1,2) ~ 0,
+    week %in% c(3,4) ~ 1,
+    TRUE ~ 2
+  ))
+  
+train_data = train_data %>%  # Ensure duplicate_amount is at least 1
+  slice(rep(row_number(), duplicate_amount+1)) %>% relocate(duplicate_amount, .after = CAN_LISTING_CTR_CD)
+
+```
+
+
+## Adjust delisting time variables
+```{r}
+
+# Censoring at 6 weeks post transplant
+# Depending on whether the week is even or odd, this translates to 4 or 5 weeks of follow up after delisting
+# If candidates dies more than 4/5 weeks after delisting, they are censored
+
+train_data = train_data %>% group_by(PX_ID) %>% mutate(
+  time_until_censor_after_delisting = case_when(
+    !is.na(time_until_censor_after_delisting) & n() %% 2 == 0 ~ 28,
+    !is.na(time_until_censor_after_delisting) & n() %% 2 != 0 ~ 35,
+    time_until_death_after_delisting > 28 & max(week) %% 2 == 0 ~ 28,
+    time_until_death_after_delisting > 35 & max(week) %% 2 != 0 ~ 35,
+    TRUE ~ NA
+  )
+)
+
+# Delisting is last row in PX_ID with non-na values for time after delisting
+# Max duplicates after delisting within a landmark is determined by these time variables
+train_data = train_data %>% group_by(PX_ID) %>% mutate(
+  delisting = case_when(
+    !is.na(time_until_death_after_delisting) & row_number() == n() & n() %% 2 == 0 & time_until_death_after_delisting <= 28 ~ 1,
+     !is.na(time_until_death_after_delisting) & row_number() == n() & n() %% 2 != 0 & time_until_death_after_delisting <= 35 ~ 1,
+    !is.na(time_until_censor_after_delisting) & row_number() == n() ~ 1,
+    TRUE ~ 0)
+  ) %>% mutate(duplicates_after_delisting = case_when(
+  delisting == 1 & time_until_death_after_delisting > 0 & is.na(time_until_censor_after_delisting) ~ ceiling(time_until_death_after_delisting/7),
+  delisting == 1 & time_until_censor_after_delisting > 0 ~ ceiling(time_until_censor_after_delisting/7),
+  TRUE ~ 0))
+
+# Total duplicates after delisting as a function of week and the previous delisting variable
+train_data = train_data %>% group_by(PX_ID) %>% mutate(
+  total_duplicates = case_when(
+    week <= 2 ~ duplicates_after_delisting,
+    week == 3 & duplicates_after_delisting %in% c(1,2,3) ~ 2*duplicates_after_delisting,
+    week == 3 & duplicates_after_delisting == 4 ~ 7,
+    week == 3 & duplicates_after_delisting == 5 ~ 8,
+    week %% 2 == 0 & duplicates_after_delisting %in% c(1,2) ~ 2*duplicates_after_delisting,
+    week %% 2 == 0 & duplicates_after_delisting == 3 ~ 5,
+    week %% 2 == 0 & duplicates_after_delisting == 4 ~ 6,
+    week %% 2 != 0 & duplicates_after_delisting %in% c(1,2,3) ~ 2*duplicates_after_delisting + 1,
+    week %% 2 != 0 & duplicates_after_delisting == 4 ~ 8,
+    week %% 2 != 0 & duplicates_after_delisting == 5 ~ 9,
+    TRUE ~ 0
+  )
+)
+```
+
+## Make separate delisting duplicate dataset
+```{r}
+
+# Filter to only observations where there are >0 duplicates after delisting
+# Duplicate these entries based on that amount, set most variables to NA
+delisting_duplicates = train_data %>%
+  ungroup() %>%
+  filter(total_duplicates > 0) %>%
+  uncount(total_duplicates) %>%
+  mutate(across(!PX_ID & !week & !duplicates_after_delisting & !outcome, ~ NA))
+
+# Adjust week variable as a function of the original week and how many duplicates there are
+# Not sure if there's an easier way to do this
+delisting_duplicates = delisting_duplicates %>%
+  group_by(PX_ID) %>%
+  rowwise() %>%
+  mutate(
+    week = case_when(
+      week %in% c(1, 2) ~ list(c(seq(1 + max(week), week + max(duplicates_after_delisting)))),
+      week == 3 & duplicates_after_delisting %in% c(1, 2, 3) ~ list(rep(seq(max(week) + 1, max(week) + max(duplicates_after_delisting)), each = 2)),
+      week == 3 & duplicates_after_delisting == 4 ~ list(c(rep(seq(max(week) + 1, max(week) + 3), each = 2), max(duplicates_after_delisting) + max(week))),
+      week == 3 & duplicates_after_delisting == 5 ~ list(c(rep(seq(max(week) + 1, max(week) + 3), each = 2), max(duplicates_after_delisting) + max(week) - 1, max(duplicates_after_delisting) + max(week))),
+      week >= 4 & week %% 2 == 0 & duplicates_after_delisting %in% c(1,2) ~ list(rep(seq(max(week) + 1, max(week) + max(duplicates_after_delisting)), each = 2)),
+      week > 4 & week %% 2 == 0 & duplicates_after_delisting == 3 ~ list(c(rep(seq(max(week) + 1, max(week) + 2), each = 2), max(duplicates_after_delisting) + max(week))),
+      week > 4 & week %% 2 == 0 & duplicates_after_delisting == 4 ~ list(c(rep(seq(max(week) + 1, max(week) + 2), each = 2), max(duplicates_after_delisting) + max(week) - 1, max(duplicates_after_delisting) + max(week))),
+      week > 4 & week %% 2 != 0 & duplicates_after_delisting == 1 ~ list(rep(max(week) + 1, 3)),
+      week > 4 & week %% 2 != 0 & duplicates_after_delisting %in% c(2,3) ~ list(c(rep(max(week) + 1, 3), rep(seq(max(week) + 2, max(week) + max(duplicates_after_delisting)), 2))),
+      week > 4 & week %% 2 != 0 & duplicates_after_delisting == 4 ~ list(c(rep(max(week) + 1, 3), rep(seq(max(week) + 2, max(week) + max(duplicates_after_delisting - 1)),2), max(week) + max(duplicates_after_delisting))),
+      week > 4 & week %% 2 != 0 & duplicates_after_delisting == 5 ~ list(c(rep(max(week) + 1, 3), rep(seq(max(week) + 2, max(week) + max(duplicates_after_delisting - 2)),2), max(week) + max(duplicates_after_delisting) - 1, max(week) + max(duplicates_after_delisting))),
+      
+      TRUE ~ list(NA_real_)
+    )
+  ) %>% group_by(PX_ID) %>%
+  filter(row_number() == 1) %>%
+  unnest(cols = c(week)) %>%
+  ungroup()
+
+
+```
+
+```{r}
+# Remove total_duplicates from train_data so columns match
+train_data = train_data %>% select (-total_duplicates)
+```
+
+# Fit transplant model, create probability of no transplant variable
+```{r}
+
+tx_status_hemo_model = glm(formula = as.formula(
+   transplant ~ 
+    ns(albumin, df = 3) + ns(bilirubin, df = 3) + ns(eGFR, df = 3) + ns(sodium, df = 3) + 
+    ns(BNP, df = 3)*BNP_NT_Pro + 
+    durable_LVAD + short_MCS_ever + status + ns(cpo, df = 3) + ns(api, df = 3) + ns(papi, df = 3)), data = train_data, family = binomial)
+
+train_data = train_data %>% ungroup() %>% mutate(
+  prob_no_tx = 1 - predict(tx_status_hemo_model, type = "response"))
+
+```
+
+## Adjust transplant and prob_no_tx variables in delisting dataset, merge
+```{r}
+
+
+delisting_duplicates = delisting_duplicates %>% mutate(
+  transplant = 0,
+  prob_no_tx = 1 
+)
+
+combined_df = rbind(train_data, delisting_duplicates) %>% select(-duplicate_amount)
+```
+
+
+## Define landmark variable as function of PX_ID, week, and row_number
+## Remove transplant observations
+```{r}
+
+combined_df = combined_df %>% group_by(PX_ID, week) %>%
+  mutate(landmark = case_when(
+    week %in% c(1,2) ~ 1,
+    row_number() == 1 & week %in% c(3,4,5,6) ~ 1,
+    row_number() == 1 & !(week %in% c(1,2,3,4,5,6)) ~ ceiling(week/2) - 2,
+    row_number() == 2 & week %in% c(3,4,5,6) ~ 2,
+    row_number() == 2 & !(week %in% c(3,4,5,6)) ~ ceiling(week/2) - 1,
+    row_number() == 3 & week %in% c(5,6) ~ 3,
+    row_number() == 3 ~ ceiling(week/2)
+  )) %>% arrange(PX_ID, landmark) %>% 
+  relocate(landmark, .after = CAN_LISTING_CTR_CD)
+
+combined_df = combined_df %>% filter(transplant == 0)
+
+
+
+# Adjust outcome variable so it's only 1 in the last week of each patient who dies
+combined_df = combined_df %>% ungroup() %>% 
+  group_by(PX_ID) %>%
+  fill(time_until_death_after_delisting, time_until_censor_after_delisting, .direction = 'down') %>%
+  mutate(
+    outcome = case_when(
+      outcome == 1 & row_number() == n() ~ 1,
+      week == max(week) & week %% 2 == 0 & !is.na(time_until_death_after_delisting) & time_until_death_after_delisting <= 28 ~ 1,
+      week == max(week) & week %% 2 != 0 & !is.na(time_until_death_after_delisting) & time_until_death_after_delisting <= 35 ~ 1,
+      TRUE ~ 0
+    )
+  )
+
+# Create weight variable based on prob_no_tx
+combined_df = combined_df %>% group_by(PX_ID, landmark) %>% mutate(
+  weight = 1/(cumprod(prob_no_tx))
+) %>% ungroup()
+
+
+```
+
+```{r}
+combined_df %>% group_by(PX_ID) %>% select(PX_ID, landmark, week, prob_no_tx, weight) 
+```
+
+
+
+
+
+
+
+

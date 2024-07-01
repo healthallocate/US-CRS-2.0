@@ -10,13 +10,25 @@ date: "2024-06-06"
 knitr::opts_chunk$set(echo = TRUE)
 rm(list=ls())
 setwd("C:/Users/mhwhi/Downloads")
-load("heart_post_policy.RData")
+load("heart_post_policy (3).RData")
 df_cand_thor <- haven::read_sas('./pubsaf2403/cand_thor.sas7bdat')
 library(dplyr)
 library(tidyr)
+library(lubridate)
+
+
 ```
 
+## Identify candidates who were delisted
+## Determine time to death / censor for these candidates
+```{r}
+df = df %>% mutate(
+  delisting = ifelse(grepl("CAN_REM_DT", unique_event) & !grepl("REC_TX_DT", unique_event), 1, 0)
+) %>% mutate(
+  time_until_death_after_delisting = ifelse(delisting == 1 & outcome == 1, t_stop - t_start, NA),
+  time_until_censor_after_delisting = ifelse(delisting == 1 & outcome == 0, t_stop - t_start, NA)) %>% group_by(PX_ID) %>% fill(time_until_death_after_delisting, time_until_censor_after_delisting, .direction = "up")
 
+```
 
 
 
@@ -24,9 +36,10 @@ library(tidyr)
 ## Discrete time data construction
 ```{r}
 # create tx dataset
-# remove rows at time of transplant
+# remove rows at time of transplant, removal
 df_tx = df %>% filter(transplant == 1)
-df = df %>% filter(transplant == 0)
+df = df %>% filter(!grepl("CAN_REM_DT", unique_event) & unique_date <= mdy("12-31-2023"))
+
 
 # define period to group observations that occur within the same week
 # take first observation within each week
@@ -44,9 +57,10 @@ df_final = df %>% mutate(
   ) %>% ungroup() %>% uncount(duplicates) %>%
   group_by(PX_ID) %>%
   mutate(interval_start = seq(0, max(t_stop) - 7, by = 7),
-         interval_stop = interval_start + 7) %>%
+                             interval_stop = interval_start + 7) %>%
   ungroup()
 
+df_final
 
 ```
 
