@@ -220,6 +220,24 @@ combined_df %>% group_by(PX_ID) %>% select(PX_ID, landmark, week, prob_no_tx, we
 ```
 
 
+```{r}
+
+
+combined_df = combined_df %>% group_by(PX_ID, landmark) %>% mutate(
+  albumin_at_start = first(albumin),
+  bilirubin_at_start = first(bilirubin),
+  eGFR_at_start = first(eGFR),
+  sodium_at_start = first(sodium),
+  BNP_at_start = first(BNP),
+  BNP_NT_Pro_at_start = first(BNP_NT_Pro),
+  durable_LVAD_at_start = first(durable_LVAD),
+  short_mcs_ever_at_start = first(short_MCS_ever),
+  status_at_start = first(status),
+  cpo_at_start = first(cpo),
+  api_at_start = first(api),
+  papi_at_start = first(papi)
+)
+```
 
 
 
