@@ -8,13 +8,26 @@ date: "2024-06-06"
 ## Dataset can be constructed from the heart_pipeline_final.Rmd file
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-rm(list=ls())
 setwd("C:/Users/mhwhi/Downloads")
 load("heart_post_policy (3).RData")
 df_cand_thor <- haven::read_sas('./pubsaf2403/cand_thor.sas7bdat')
+library(renv)
+renv::init()
 library(dplyr)
 library(tidyr)
 library(lubridate)
+
+
+```
+
+## Censor candidates past December 31st, 2023
+```{r}
+df = df  %>% 
+  filter(unique_date <= mdy("12-31-2023")) %>% 
+  group_by(PX_ID) %>%
+  mutate(
+    t_stop = ifelse(row_number() == n() & t_stop - t_start >  mdy("12-31-2023") - as.Date(unique_date), t_start + mdy("12-31-2023") - as.Date(unique_date), t_stop)
+  )
 
 
 ```
@@ -38,7 +51,7 @@ df = df %>% mutate(
 # create tx dataset
 # remove rows at time of transplant, removal
 df_tx = df %>% filter(transplant == 1)
-df = df %>% filter(!grepl("CAN_REM_DT", unique_event) & unique_date <= mdy("12-31-2023"))
+df = df %>% filter(!grepl("CAN_REM_DT", unique_event))
 
 
 # define period to group observations that occur within the same week

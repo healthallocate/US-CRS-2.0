@@ -154,10 +154,11 @@ tx_status_hemo_model = glm(formula = as.formula(
    transplant ~ 
     ns(albumin, df = 3) + ns(bilirubin, df = 3) + ns(eGFR, df = 3) + ns(sodium, df = 3) + 
     ns(BNP, df = 3)*BNP_NT_Pro + 
-    durable_LVAD + short_MCS_ever + status + ns(cpo, df = 3) + ns(api, df = 3) + ns(papi, df = 3)), data = train_data, family = binomial)
+    durable_LVAD + short_MCS_ever + status + ns(cpo, df = 3) + ns(api, df = 3) + ns(papi, df = 3)), data = df_final, family = binomial)
 
 train_data = train_data %>% ungroup() %>% mutate(
-  prob_no_tx = 1 - predict(tx_status_hemo_model, type = "response"))
+  prob_no_tx = 1 - predict(tx_status_hemo_model, newdata = train_data, type = "response"))
+
 
 ```
 
@@ -219,7 +220,7 @@ combined_df = combined_df %>% group_by(PX_ID, landmark) %>% mutate(
 combined_df %>% group_by(PX_ID) %>% select(PX_ID, landmark, week, prob_no_tx, weight) 
 ```
 
-
+## Landmark start variables
 ```{r}
 
 
@@ -239,8 +240,74 @@ combined_df = combined_df %>% group_by(PX_ID, landmark) %>% mutate(
 )
 ```
 
+## Overall distribution
+```{r}
+summary(combined_df$weight)
+```
+## Distributions by week within landmark
+```{r}
+combined_df = combined_df %>% mutate(
+  week_in_landmark = row_number()
+) %>% ungroup()
+
+combined_df %>% select(PX_ID, landmark, week, week_in_landmark)
+
+distribution_1 = subset(combined_df, week_in_landmark == 1)
+distribution_2 = subset(combined_df, week_in_landmark == 2)
+distribution_3 = subset(combined_df, week_in_landmark == 3)
+distribution_4 = subset(combined_df, week_in_landmark == 4)
+distribution_5 = subset(combined_df, week_in_landmark == 5)
+distribution_6 = subset(combined_df, week_in_landmark == 6)
+
+summary(distribution_1$weight)
+summary(distribution_2$weight)
+summary(distribution_3$weight)
+summary(distribution_4$weight)
+summary(distribution_5$weight)
+summary(distribution_6$weight)
+
+
+```
+## Mortality model without weights
+```{r}
+mortality_model_no_weights = glm(formula = as.formula(
+  outcome ~ 
+    albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1):BNP_NT_Pro_at_start + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + cpo_at_start + api_at_start + papi_at_start), data = combined_df, family = binomial)
+
+
+mortality_model_no_weights
+```
+## Mortality model with weights
+```{r}
+mortality_model_weights = glm(formula = as.formula(
+  outcome ~ 
+    albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1):BNP_NT_Pro_at_start + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + cpo_at_start + api_at_start + papi_at_start), data = combined_df, weights = weight, family = binomial)
+
+
+mortality_model_weights
+```
 
 
 
+## Check distribution by mcs variable
+```{r}
+short_mcs = combined_df %>% filter(short_mcs_ever_at_start == 1)
+no_short_mcs = combined_df %>% filter(short_mcs_ever_at_start == 0)
 
+summary(short_mcs$weight)
+summary(no_short_mcs$weight)
+```
+## Truncate weights and rerun model
+```{r}
+combined_df = combined_df %>% mutate(
+  weight = ifelse(weight > 10, 10, weight)
+)
+
+mortality_model_weights = glm(formula = as.formula(
+  outcome ~ 
+    albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1):BNP_NT_Pro_at_start + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + cpo_at_start + api_at_start + papi_at_start), data = combined_df, weights = weight, family = binomial)
+
+
+mortality_model_weights
+```
 
