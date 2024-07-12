@@ -1361,7 +1361,7 @@ df$status_initial = recode_factor(df$CAN_INIT_STAT,
 
 
 ###################################
-df = df %>% fill(status, .direction = "down")
+df = df %>% group_by(PX_ID) fill(status, .direction = "down")
 
 ## Diagnosis, diabetes, and dialysis
 
