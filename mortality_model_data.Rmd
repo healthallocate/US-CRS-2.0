@@ -8,11 +8,13 @@ date: "2024-06-24"
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 rm(list=ls())
-setwd("C:/Users/mhwhi/Downloads")
-load("discrete_final_data.RData")
+setwd("C:/Users/mhwhi/Downloads/uscrs_2.0")
+load("discrete_data.RData")
+load("df_intervals_setup.RData")
 library(dplyr)
 library(splines)
 library(tidyr)
+library(ggplot2)
 ```
 
 # Split data into training / testing sets
@@ -191,7 +193,6 @@ combined_df = combined_df %>% group_by(PX_ID, week) %>%
   )) %>% arrange(PX_ID, landmark) %>% 
   relocate(landmark, .after = CAN_LISTING_CTR_CD)
 
-combined_df = combined_df %>% filter(transplant == 0)
 
 
 
@@ -199,14 +200,17 @@ combined_df = combined_df %>% filter(transplant == 0)
 combined_df = combined_df %>% ungroup() %>% 
   group_by(PX_ID) %>%
   fill(time_until_death_after_delisting, time_until_censor_after_delisting, .direction = 'down') %>%
+  group_by(PX_ID, landmark) %>%
   mutate(
     outcome = case_when(
-      outcome == 1 & row_number() == n() ~ 1,
+      outcome == 1 & row_number() == n() & CAN_REM_CD != 4 ~ 1,
       week == max(week) & week %% 2 == 0 & !is.na(time_until_death_after_delisting) & time_until_death_after_delisting <= 28 ~ 1,
       week == max(week) & week %% 2 != 0 & !is.na(time_until_death_after_delisting) & time_until_death_after_delisting <= 35 ~ 1,
       TRUE ~ 0
     )
   )
+
+combined_df = combined_df %>% filter(transplant == 0)
 
 # Create weight variable based on prob_no_tx
 combined_df = combined_df %>% group_by(PX_ID, landmark) %>% mutate(
@@ -270,13 +274,41 @@ summary(distribution_6$weight)
 ```
 ## Mortality model without weights
 ```{r}
+
 mortality_model_no_weights = glm(formula = as.formula(
   outcome ~ 
-    albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1):BNP_NT_Pro_at_start + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + cpo_at_start + api_at_start + papi_at_start), data = combined_df, family = binomial)
+    albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1):as.character(BNP_NT_Pro_at_start) + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + cpo_at_start + api_at_start + papi_at_start), data = combined_df, family = binomial)
 
 
 mortality_model_no_weights
 ```
+
+```{r}
+# lvad test variable for turning lvad variable into "currently qualifying by lvad"
+df_intervals = df_intervals %>% dplyr::mutate(
+  durable_LVAD = as.numeric(as.character(durable_LVAD)),
+  durable_LVAD_test = case_when(
+    durable_LVAD == 1 ~ 1,
+    lag(PX_ID) == PX_ID & cumsum(durable_LVAD) > 0 ~ 1,
+    TRUE ~ 0
+  )
+) 
+             
+df_intervals %>% select(PX_ID, durable_LVAD) %>% filter(PX_ID == 1251088)
+
+
+uscrs_model = glm(formula = as.formula(
+  death6week ~ 
+    albumin + log(bilirubin + 1) + 
+    eGFR + sodium + 
+    (log(BNP + 1):BNP_NT_Pro) + 
+    durable_LVAD_test + short_MCS_ever), 
+  data = df_intervals[df_intervals$train_test == 'Train',], 
+  family = binomial)
+
+uscrs_model
+```
+
 ## Mortality model with weights
 ```{r}
 mortality_model_weights = glm(formula = as.formula(
@@ -309,5 +341,77 @@ mortality_model_weights = glm(formula = as.formula(
 
 
 mortality_model_weights
+```
+
+```{r}
+# Extract coefficients and confidence intervals
+coef1 <- summary(mortality_model_no_weights)$coefficients
+coef2 <- summary(uscrs_model)$coefficients
+
+
+# Create data frames with the coefficients and confidence intervals
+df1 <- data.frame(
+  term = rownames(coef1),
+  estimate = coef1[, "Estimate"],
+  conf.low = coef1[, "Estimate"] - 1.96 * coef1[, "Std. Error"],
+  conf.high = coef1[, "Estimate"] + 1.96 * coef1[, "Std. Error"],
+  model = "Model without Weights"
+)
+
+# Same terms as US-CRS + hemodynamics
+df2 <- data.frame(
+  term = setdiff(rownames(coef1), c("papi_at_start", "cpo_at_start", "api_at_start")),
+  estimate = coef2[, "Estimate"],
+  conf.low = coef2[, "Estimate"] - 1.96 * coef2[, "Std. Error"],
+  conf.high = coef2[, "Estimate"] + 1.96 * coef2[, "Std. Error"],
+  model = "USCRS 1.0"
+)
+
+df1 <- df1[df1$term != "(Intercept)", ]
+df2 <- df2[df2$term != "(Intercept)", ]
+
+# Combine the two data frames
+forest_df <- rbind(df1, df2)
+
+```
+
+## Forest plot
+```{r}
+
+# Rename and reorder variables
+new_names <- c("sodium_at_start" = "Sodium", "short_mcs_ever_at_start" = "Short-term MCS", "papi_at_start" = "PAPI", "log(BNP_at_start + 1):as.character(BNP_NT_Pro_at_start)0" = "Log BNP, Regular BNP", "log(BNP_at_start + 1):as.character(BNP_NT_Pro_at_start)1" = "Log BNP, NT-proBNP", "log(bilirubin_at_start + 1)" = "Log Bilirubin", "eGFR_at_start" = "eGFR", "durable_LVAD_at_start" = "Durable LVAD", "cpo_at_start" = "CPO", "api_at_start" = "API", "albumin_at_start" = "Albumin" )
+term_order <- c("PAPI", "API", "CPO", "Durable LVAD", "Sodium", "Albumin", "Log BNP, NT-proBNP", "Log BNP, Regular BNP", "eGFR", "Log Bilirubin", "Short-term MCS")
+forest_df
+
+forest_df <- forest_df %>%
+  mutate(term = recode(term, !!!new_names))
+forest_df <- forest_df %>%
+  mutate(term = factor(term, levels = term_order))# Create the forest plot
+ggplot(forest_df, aes(x = estimate, y = term, color = model)) +
+  geom_point(position = position_dodge(width = 0.5)) +
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.2, position = position_dodge(width = 0.5)) +
+  labs(x = "Coefficient Estimate", y = "Term", title = "Model Coefficients") +
+  theme_minimal()
+
+new_names
+```
+
+
+
+
+
+
+
+## 6 status model
+```{r}
+model6status <- glm(formula = as.formula(
+  outcome ~ status_at_start), 
+  data = combined_df, 
+  family = binomial)
+
+model6status
+```
+```{r}
+
 ```
 

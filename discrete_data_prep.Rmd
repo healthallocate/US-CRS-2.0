@@ -12,12 +12,15 @@ setwd("C:/Users/mhwhi/Downloads")
 load("heart_post_policy (3).RData")
 df_cand_thor <- haven::read_sas('./pubsaf2403/cand_thor.sas7bdat')
 library(renv)
-renv::init()
 library(dplyr)
 library(tidyr)
 library(lubridate)
 
-
+df2 <- subset(df, df$t_start == '0' & as.Date(df$unique_date) >= '2019-01-01' & 
+                as.Date(df$unique_date) <= '2022-12-31')
+postpolicy_id <- unique(df2$PX_ID)
+rm(df2)
+df <- df[which(df$PX_ID %in% postpolicy_id), ]
 ```
 
 ## Censor candidates past December 31st, 2023
@@ -28,7 +31,6 @@ df = df  %>%
   mutate(
     t_stop = ifelse(row_number() == n() & t_stop - t_start >  mdy("12-31-2023") - as.Date(unique_date), t_start + mdy("12-31-2023") - as.Date(unique_date), t_stop)
   )
-
 
 ```
 
@@ -50,7 +52,7 @@ df = df %>% mutate(
 ```{r}
 # create tx dataset
 # remove rows at time of transplant, removal
-df_tx = df %>% filter(transplant == 1)
+df_tx = df %>% filter(transplant == 1 | CAN_REM_CD == 4)
 df = df %>% filter(!grepl("CAN_REM_DT", unique_event))
 
 
@@ -84,7 +86,7 @@ df_final
 
 ## Set transplant = 1 for PX_ID in transplant list, at their last observation on the waitlist
 ```{r}
-tx_patients = df_tx$PX_ID
+tx_patients = unique(df_tx$PX_ID)
 
 df_final = df_final %>% group_by(PX_ID) %>%
   mutate(
@@ -92,7 +94,7 @@ df_final = df_final %>% group_by(PX_ID) %>%
 ) %>% select(-c(t_start, t_stop, period, unique_event, unique_date)) %>% 
   relocate(interval_start, interval_stop, .after=CAN_LISTING_CTR_CD)
 
-
+df_final %>% filter(PX_ID == 1310477) %>% select(PX_ID, transplant)
 ```
 
 ## Define short term mcs ever variables
@@ -255,6 +257,9 @@ save("df_final", file =  "discrete_final_data.RData")
 
 
 
+```{r}
+df %>% filter(PX_ID == 1511673)
+```
 
 
 
