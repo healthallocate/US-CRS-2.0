@@ -24,11 +24,12 @@ library(lubridate)
 library(zoo)
 library(labelled)
 library(pacman)
+library(stringr)
 
 here::i_am("heart_data_pipeline.Rmd")
 
-
 RData_file_loaded = FALSE
+
 ```
 
 # Import data sets from SRTR
@@ -214,7 +215,7 @@ just_form_hr_stat4 = just_form_hr_stat4 %>%
               select(JustId, PX_ID, ChangeDt), by = "JustId")
 
 
-
+just_form_hr_stat3 %>% filter(PX_ID == 1251088)
 ```
 
 # Tidy input datasets
@@ -225,8 +226,8 @@ just_form_hr_stat4 = just_form_hr_stat4 %>%
 ```{r apply exclusion criteria}
 
 # change these variables to customize inclusion criteria
-filter_date_start = mdy("10-18-2018")
-filter_date_end = mdy("12-31-2022")
+filter_date_start = mdy("01-01-2019")
+filter_date_end = mdy("11-15-2023")
 include_multi_organ_recipients = TRUE
 
 # See code chunk #7 if using pre-policy data
@@ -400,7 +401,9 @@ full_list = cand_list %>%
   arrange(PX_ID, unique_date) %>% 
   ungroup()
   
+full_list %>% filter(PX_ID == 1250934)
 
+stathist
 ```
 
 # Pivot tx_list by date, then join with full_list
@@ -690,6 +693,8 @@ risk_strat = risk_strat %>%
   arrange(PX_ID, unique_date)
 
 risk_strat %>% filter(PX_ID == 1387071) %>% select(starts_with("Criteria"))
+
+gc()
 ```
 
 
@@ -1340,7 +1345,7 @@ df$age_at_listing = df$CAN_AGE_IN_MONTHS_AT_LISTING / 12
 
 ## Initial status at listing
 # 2010 = Status 1A, 2020 = Status 1B, 2030 = (Old) Status 2
-df$status = recode_factor(df$RequestedCandStatCd,
+df$status = recode_factor(df$CANHX_STAT_CD,
                            '1110' = '1', '1120' = '2', '1130' = '3',
                            '1140' = '4', '1150' = '5', '1160' = '6',
                            '2110' = '1', '2120' = '2', '2130' = '3',
@@ -1359,9 +1364,18 @@ df$status_initial = recode_factor(df$CAN_INIT_STAT,
                            '2010' = NA_character_, '2020' = NA_character_, '2030' = '6',
                            '2999' = 'inactive')
 
+#status variable for lvad calculation (setting inactive candidates' status to their last status before inactivity)
+df$status_for_lvad = recode_factor(df$CANHX_STAT_CD,
+                           '1110' = '1', '1120' = '2', '1130' = '3',
+                           '1140' = '4', '1150' = '5', '1160' = '6',
+                           '2110' = '1', '2120' = '2', '2130' = '3',
+                           '2140' = '4', '2150' = '5', '2160' = '6',
+                           
+                           '1999' = NA_character_, 
+                           '2010' = NA_character_, '2020' = NA_character_, '2030' = '6',
+                           '2999' = NA_character_)
 
-###################################
-df = df %>% group_by(PX_ID) fill(status, .direction = "down")
+df = df %>% group_by(PX_ID) %>% fill(status_for_lvad, .direction = "down")
 
 ## Diagnosis, diabetes, and dialysis
 
@@ -1406,7 +1420,7 @@ durable_lvad_types = c('202', '205', '206', '207', '208', '209', '210',
 df = df %>% mutate(
   durable_LVAD = case_when(
     CriteriaLvadSupport.stat3 == 1 | CriteriaLvadDiscSupport == 1 |
-    ((CAN_VAD_TY == 2 & status != '5' & status != '6') & 
+    ((CAN_VAD_TY == 2 & status_for_lvad != '5' & status_for_lvad != '6') & 
     ((CAN_VAD1 %in% durable_lvad_types) |
     (CAN_VAD2 %in% durable_lvad_types))) ~ 1,
     TRUE ~ 0), 
@@ -1429,13 +1443,22 @@ df = df %>% mutate(
     BivadPlacement == 1 ~ 1,
  TRUE ~ 0))
 
+# fill lvad variable down (LVAD ever variable)
+df = df %>% mutate(
+  durable_LVAD = case_when(
+    durable_LVAD == 1 ~ 1,
+    cumsum(durable_LVAD) > 0 ~ 1,
+  TRUE ~ 0)
+)
 
-df = df %>% select(-c(JustId,
-                       start_date, death_date_max, transplant_date,
-                       removal_date, removal_code_cand_thor, death_date, 
 
-                       CAN_AGE_IN_MONTHS_AT_LISTING, CAN_INIT_STAT, CAN_VAD_TY, CAN_VAD1, CAN_VAD2, BivadPlacement, starts_with("Criteria")))
+# df = df %>% select(-c(JustId,
+#                       start_date, death_date_max, transplant_date,
+#                       removal_date, removal_code_cand_thor, death_date, #
 
+ #                      CAN_AGE_IN_MONTHS_AT_LISTING, CAN_INIT_STAT, CAN_VAD_TY, CAN_VAD1, CAN_VAD2, BivadPlacement, starts_with("Criteria")))
+
+df %>% select(PX_ID, CANHX_STAT_CD, RequestedCandStatCd, status)
 
 ```
 
@@ -1479,6 +1502,11 @@ df = df %>% mutate(
 df %>% group_by(PX_ID) %>% filter(all(is.na(status_criteria)) & Exception == 0 & max(as.numeric(status)) < 5) %>% select(status, status_criteria)
 
 ```
+```{r}
+df %>% filter(PX_ID == 1287572) %>% select(CriteriaLvadSupport.stat3, t_start, t_stop, CriteriaLvadDiscSupport, CAN_VAD_TY, status, CAN_VAD1, CAN_VAD2, durable_LVAD)
+
+cand_list %>% filter(PX_ID == 1271711) %>% select(CAN_VAD1)
+```
 
 
 # Select variables for final dataframe
@@ -1489,6 +1517,26 @@ df = df %>% select(PX_ID, CAN_LISTING_CTR_CD, unique_event, unique_date, t_start
 save(df, file = "heart_post_policy.RData")
 View(df)
 
+```
 
+```{r}
+df %>% group_by(PX_ID) %>% filter(PX_ID == 1251084) %>% select(PX_ID, unique_date, durable_LVAD, status)
+
+df %>% filter(durable_LVAD == 1 & !(CAN_VAD1 %in% durable_lvad_types | CAN_VAD2 %in% durable_lvad_types)) %>% select(PX_ID, CriteriaLvadSupport.stat3, CriteriaLvadDiscSupport, CAN_VAD1, CAN_VAD2)
+```
+```{r}
+just_stat3 %>% filter(PX_ID == 1251088)
+
+just_form %>% filter(PX_ID == 1251088)
+
+cand_list %>% filter(PX_ID == 1251156)
+```
+```{r}
+load("cand_thor.RData")
+```
+
+```{r}
+cand_thor %>% filter(PX_ID == 1251156) %>% select()
+cand_thor$CAN_VAD_TAH
 ```
 
