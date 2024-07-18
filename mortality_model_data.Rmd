@@ -9,7 +9,7 @@ date: "2024-06-24"
 knitr::opts_chunk$set(echo = TRUE)
 rm(list=ls())
 setwd("C:/Users/mhwhi/Downloads/uscrs_2.0")
-load("discrete_data.RData")
+load("discrete_final_data.RData")
 load("df_intervals_setup.RData")
 library(dplyr)
 library(splines)
@@ -27,8 +27,10 @@ df_final$train_test <-  'Test'
 df_final$train_test[df_final$CAN_LISTING_CTR_CD %in% center_ids_train] <- 'Train'
 
 train_data = df_final %>% filter(train_test == 'Train')
-
+test_data = df_final %>% filter(train_test == 'Test')
 train_data
+
+save(test_data, file = "mortality_model_test_data.RData")
 ```
 
 
@@ -307,6 +309,8 @@ uscrs_model = glm(formula = as.formula(
   family = binomial)
 
 uscrs_model
+
+
 ```
 
 ## Mortality model with weights
@@ -398,20 +402,4 @@ new_names
 
 
 
-
-
-
-
-## 6 status model
-```{r}
-model6status <- glm(formula = as.formula(
-  outcome ~ status_at_start), 
-  data = combined_df, 
-  family = binomial)
-
-model6status
-```
-```{r}
-
-```
 

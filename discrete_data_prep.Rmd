@@ -9,18 +9,23 @@ date: "2024-06-06"
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 setwd("C:/Users/mhwhi/Downloads")
-load("heart_post_policy (3).RData")
+load("heart_post_policy (4).RData")
 df_cand_thor <- haven::read_sas('./pubsaf2403/cand_thor.sas7bdat')
 library(renv)
 library(dplyr)
 library(tidyr)
 library(lubridate)
 
+# Subset to cohort
 df2 <- subset(df, df$t_start == '0' & as.Date(df$unique_date) >= '2019-01-01' & 
                 as.Date(df$unique_date) <= '2022-12-31')
 postpolicy_id <- unique(df2$PX_ID)
 rm(df2)
 df <- df[which(df$PX_ID %in% postpolicy_id), ]
+
+# Retain listing date, transplant date for waiting time calculations
+df = df %>% mutate(can_listing_dt = if_else(grepl("CAN_LISTING_DT", unique_event), unique_date, NA),
+                   transplant_date = if_else(grepl("REC_TX_DT", unique_event), unique_date, NA)) %>% fill(can_listing_dt, transplant_date, .direction = "downup")
 ```
 
 ## Censor candidates past December 31st, 2023
