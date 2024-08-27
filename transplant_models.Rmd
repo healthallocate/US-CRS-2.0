@@ -12,6 +12,13 @@ load("discrete_final_data.RData")
 library(splines)
 library(tableone)
 library(survey)
+
+# remove people w/ weird statuses
+df_final %>% group_by(PX_ID) %>% filter(any(is.na(status)),!all(is.na(status)))
+df_final = df_final %>%
+  group_by(PX_ID) %>%
+  filter(!any(is.na(status))) %>%
+  ungroup()
 ```
 
 ## Model with only variables from US-CRS 1.0
@@ -19,10 +26,10 @@ library(survey)
 tx_model = glm(formula = as.formula(
    transplant ~ 
     ns(albumin, df = 3) + ns(bilirubin, df = 3) + ns(eGFR, df = 3) + ns(sodium, df = 3) + 
-    ns(BNP, df = 3)*BNP_NT_Pro + 
+    ns(BNP, df = 3)*BNP_NT_Pro +
     durable_LVAD + short_MCS_ever), data = df_final, family = binomial)
-
 tx_model
+summary(tx_model)
 ```
 ## Model with US-CRS 1.0 vars and status
 ```{r}
@@ -33,6 +40,7 @@ tx_status_model = glm(formula = as.formula(
     durable_LVAD + short_MCS_ever + status), data = df_final, family = binomial)
 
 tx_status_model
+summary(tx_status_model)
 ```
 
 ## Model with US-CRS 1.0 vars, status, and hemodynamics
@@ -44,6 +52,7 @@ tx_status_hemo_model = glm(formula = as.formula(
     durable_LVAD + short_MCS_ever + status + ns(cpo, df = 3) + ns(api, df = 3) + ns(papi, df = 3)), data = df_final, family = binomial)
 
 tx_status_hemo_model
+summary(tx_status_hemo_model)
 ```
 ```{r}
 
