@@ -134,7 +134,7 @@ df_final %>% filter(PX_ID == 1310477) %>% select(PX_ID, transplant)
 # Body surface area calculation
 ```{r}
 # select necessary cand thor variables
-df_cand_thor <- df_cand_thor %>% select(PX_ID, CAN_GENDER, CAN_RACE, CAN_HGT_CM, CAN_WGT_KG)
+df_cand_thor <- df_cand_thor %>% select(PX_ID, CAN_GENDER, CAN_RACE, CAN_HGT_CM, CAN_WGT_KG, CAN_ECMO)
 
 # impute missing height and weights
 df_cand_thor$CAN_HGT_CM[is.na(df_cand_thor$CAN_HGT_CM)] <-median(df_cand_thor$CAN_HGT_CM, na.rm=T)
@@ -226,9 +226,13 @@ df_final <- df_final %>%
     
     CAN_GENDER == 'M' & !is.na(creatinine) ~ 142 * (pmin((creatinine / 0.9), 1)^(-0.302)) *
       (pmax((creatinine / 0.9), 1)^(-1.2)) * 0.9938^(age_at_listing)),
-      short_MCS_ever = 
-           case_when(ECMO_ever == '1' | temp_surg_ever == '1' | BiVAD_no_discharge_ever == '1' ~ 1,
-             TRUE ~ 0))
+    short_MCS_ever_old = 
+         case_when(ECMO_ever == '1' | temp_surg_ever == '1' | BiVAD_no_discharge_ever == '1' ~ 1,
+           TRUE ~ 0),
+    short_MCS_ever = 
+         case_when(ECMO_ever == '1' | temp_surg_ever == '1' | BiVAD_no_discharge_ever == '1' | CAN_ECMO %in% 1 ~ 1,
+           TRUE ~ 0))
+with(df_final,table(short_MCS_ever_old,short_MCS_ever,useNA="ifany"))
 
 df_final %>% filter(is.na(creatinine))
 ```
