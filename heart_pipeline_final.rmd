@@ -877,7 +877,14 @@ risk_strat = risk_strat %>%
               values_from = indicator) %>% 
   
   relocate(status_criteria, .after = unique_event) %>% 
-  arrange(PX_ID, JustId, unique_date) %>% 
+  arrange(PX_ID, JustId, unique_date) %>%
+  
+  # # keep track of which status was requested by this JustId and by which criteria
+  # mutate(RequestedCandStatCd_criteria = status_criteria) %>%
+  # group_by(PX_ID, JustId) %>% 
+  # fill(RequestedCandStatCd,.direction="downup") %>%
+  # fill(RequestedCandStatCd_criteria, .direction = "downup") %>%
+  
   group_by(PX_ID, JustId, unique_event, unique_date) %>%
   fill(status_criteria, .direction = "downup") %>%
   filter(row_number() == n()) %>% 
@@ -965,7 +972,7 @@ full_list = full_list %>%
   # fill variables "down" to show change over time
   # this fills in missing values using the na.locf() method
   group_by(PX_ID) %>%
-  fill(systolicBP:CANHX_STAT_CD, .direction = "down") %>%
+  fill(systolicBP:CANHX_STAT_CD, .direction = "down") %>% # note: not including CANHX_REASON_STAT_INACT
   ungroup() %>%
 
   arrange(PX_ID, unique_date) %>%
@@ -980,7 +987,7 @@ full_list = full_list %>%
   # fill variables "down" to show change over time
   # this fills in missing values using the na.locf() method
   group_by(PX_ID, JustId) %>%
-  fill(status_criteria:ExtInotropeDopamine, .direction = "down") %>%
+  fill(status_criteria:ExtInotropeDopamine, .direction = "down") %>% # status_criteria and RequestedCandStatCd are filled "down" but grouped by JustId which means the fill can stop (same for other variables here and dose variables below)
   ungroup() %>%
 
   arrange(PX_ID, unique_date) %>%
@@ -1024,6 +1031,7 @@ df = full_list %>%
     
     # cand_thor variables
     grepl("CAN_LISTING_DT", unique_event) |
+      grepl("CAN_DEATH_DT", unique_event) |
       grepl("PERS_OPTN_DEATH_DT", unique_event) |
       grepl("PERS_SSA_DEATH_DT", unique_event) |
       grepl("CAN_REM_DT", unique_event) |
@@ -1146,6 +1154,8 @@ df = df %>% group_by(PX_ID) %>%
   filter(cumsum(grepl("CAN_LISTING_DT", unique_event)) >= 1) %>%
   ungroup()
 
+# no more missing statuses
+table(df$CANHX_STAT_CD,useNA="ifany")
 
 ```
 
@@ -1245,7 +1255,10 @@ df = df %>% arrange(PX_ID, unique_date) %>%
   mutate(removal_time = as.numeric(pmax(removal_date, last_active_date, last_inactive_date, na.rm = T) - 
                                      start_date, units='days'))
 
-  
+# confirm these are constant across px_id
+df %>% group_by(PX_ID) %>% filter(n_distinct(transplant_time)!=1)
+df %>% group_by(PX_ID) %>% filter(n_distinct(death_time)!=1)
+df %>% group_by(PX_ID) %>% filter(n_distinct(removal_time)!=1)
   
 
 ```
