@@ -8,9 +8,17 @@ date: "2024-06-06"
 ## Dataset can be constructed from the heart_pipeline_final.Rmd file
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+
+# Molly:
 setwd("C:/Users/mhwhi/Downloads")
 load("heart_post_policy (4).RData")
 df_cand_thor <- haven::read_sas('./pubsaf2403/cand_thor.sas7bdat')
+
+# Grace:
+# load("heart_post_policy.RData")
+# curr_data_release = "//srtr-fs-p01/SAF/External/Pub_SAF/saf2403_Q1/pubsaf2403"
+# df_cand_thor <- haven::read_sas(file.path(curr_data_release,'cand_thor.sas7bdat'))
+
 library(renv)
 library(dplyr)
 library(tidyr)
@@ -36,6 +44,7 @@ df = df  %>%
   mutate(
     t_stop = ifelse(row_number() == n() & t_stop - t_start >  mdy("12-31-2023") - as.Date(unique_date), t_start + mdy("12-31-2023") - as.Date(unique_date), t_stop)
   )
+# we have recoded t_stop for candidates censored on 12/31/2023 but have not recoded outcome to be 0 if the death date is after 12/31/2023
 
 ```
 
@@ -57,9 +66,8 @@ df = df %>% mutate(
 ```{r}
 # create tx dataset
 # remove rows at time of transplant, removal
-df_tx = df %>% filter(transplant == 1 | CAN_REM_CD == 4)
-df = df %>% filter(!grepl("CAN_REM_DT", unique_event))
-
+df_tx = df %>% filter(transplant == 1 | (CAN_REM_CD == 4 & grepl("CAN_REM_DT",unique_event)))
+df = df %>% filter(cumsum(grepl("CAN_REM_DT", unique_event))<1)
 
 # define period to group observations that occur within the same week
 # take first observation within each week
@@ -69,6 +77,7 @@ df = df %>% filter(!grepl("CAN_REM_DT", unique_event))
 df_final = df %>% mutate(
   period = ceiling(t_stop/7)
 ) %>% group_by(PX_ID, period) %>% 
+  # taking the first row per week
   filter(row_number() == 1) %>% 
   mutate(
     t_start = ceiling(t_start/7)*7,
@@ -105,6 +114,7 @@ df_final %>% filter(PX_ID == 1310477) %>% select(PX_ID, transplant)
 ## Define short term mcs ever variables
 ```{r}
 
+# we should create these "ever" variables before removing rows
 df_final <- df_final %>%
   group_by(PX_ID) %>%
   
@@ -134,7 +144,7 @@ df_cand_thor$CAN_WGT_KG[is.na(df_cand_thor$CAN_WGT_KG)] <-median(df_cand_thor$CA
 
 # define body surface area, merge with discrete time data
 df_cand_thor <- df_cand_thor %>%
-  mutate(bsa = 0.007184 * (CAN_HGT_CM ^ 0.425) * (CAN_WGT_KG ^ 0.725)) 
+  mutate(bsa = 0.007184 * (CAN_HGT_CM ^ 0.725) * (CAN_WGT_KG ^ 0.425)) 
 df_cand_thor <- df_cand_thor[!duplicated(df_cand_thor), ]
 df_final <- merge(df_final, df_cand_thor, by='PX_ID', all.x=T, all.y=F)
 
@@ -217,7 +227,7 @@ df_final <- df_final %>%
       (pmax((creatinine / 0.7), 1)^(-1.2)) * 0.9938^(age_at_listing) * 1.012,
     
     CAN_GENDER == 'M' & !is.na(creatinine) ~ 142 * (pmin((creatinine / 0.9), 1)^(-0.302)) *
-      (pmax((creatinine / 0.7), 1)^(-1.2)) * 0.9938^(age_at_listing)),
+      (pmax((creatinine / 0.9), 1)^(-1.2)) * 0.9938^(age_at_listing)),
       short_MCS_ever = 
            case_when(ECMO_ever == '1' | temp_surg_ever == '1' | BiVAD_no_discharge_ever == '1' ~ 1,
              TRUE ~ 0))
