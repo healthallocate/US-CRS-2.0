@@ -60,7 +60,26 @@ df = df %>% mutate(
 ```
 
 
+## Define short term mcs ever variables
+```{r}
 
+df <- df %>%
+  group_by(PX_ID) %>%
+  
+  mutate(ECMO_ever = case_when(ECMO == '1' ~ '1', TRUE ~ NA_character_),
+         temp_surg_ever = case_when(temp_surg_LVAD == '1' ~ '1', TRUE ~ NA_character_),
+         BiVAD_no_discharge_ever = case_when(BiVAD_no_discharge == '1' ~ '1', TRUE ~ NA_character_)) %>%
+  
+  fill(ECMO_ever, .direction = 'down') %>%
+  fill(temp_surg_ever, .direction = 'down') %>%
+  fill(BiVAD_no_discharge_ever, .direction = 'down') %>%
+
+  mutate(ECMO_ever = case_when(is.na(ECMO_ever) ~ '0', TRUE ~ ECMO_ever),
+         temp_surg_ever = case_when(is.na(temp_surg_ever) ~ '0', TRUE ~ temp_surg_ever),
+         BiVAD_no_discharge_ever = case_when(is.na(BiVAD_no_discharge_ever) ~ '0', TRUE ~ BiVAD_no_discharge_ever))
+
+
+```
 
 ## Discrete time data construction
 ```{r}
@@ -111,27 +130,6 @@ df_final = df_final %>% group_by(PX_ID) %>%
 df_final %>% filter(PX_ID == 1310477) %>% select(PX_ID, transplant)
 ```
 
-## Define short term mcs ever variables
-```{r}
-
-# we should create these "ever" variables before removing rows
-df_final <- df_final %>%
-  group_by(PX_ID) %>%
-  
-  mutate(ECMO_ever = case_when(ECMO == '1' ~ '1', TRUE ~ NA_character_),
-         temp_surg_ever = case_when(temp_surg_LVAD == '1' ~ '1', TRUE ~ NA_character_),
-         BiVAD_no_discharge_ever = case_when(BiVAD_no_discharge == '1' ~ '1', TRUE ~ NA_character_)) %>%
-  
-  fill(ECMO_ever, .direction = 'down') %>%
-  fill(temp_surg_ever, .direction = 'down') %>%
-  fill(BiVAD_no_discharge_ever, .direction = 'down') %>%
-
-  mutate(ECMO_ever = case_when(is.na(ECMO_ever) ~ '0', TRUE ~ ECMO_ever),
-         temp_surg_ever = case_when(is.na(temp_surg_ever) ~ '0', TRUE ~ temp_surg_ever),
-         BiVAD_no_discharge_ever = case_when(is.na(BiVAD_no_discharge_ever) ~ '0', TRUE ~ BiVAD_no_discharge_ever))
-
-
-```
 
 # Body surface area calculation
 ```{r}
