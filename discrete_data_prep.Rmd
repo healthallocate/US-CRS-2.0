@@ -113,7 +113,19 @@ df_final
 ```
 
 
+# Data summary before imputation
+```{r}
+# to do:
+# we need to summarize missing data before imputation - add hemodynamics
+# also, might want to trim extreme values (to clinical cutoffs or percentiles like 99th)
 
+library(table1)
+table1(~  albumin + bilirubin + creatinine + sodium + 
+    factor(durable_LVAD) + factor(ECMO_ever), data=df_final) # very low percent missing except w/ BNP
+summary(df_final$BNP[df_final$BNP_NT_Pro %in% 0]) # should be between 0 and 20000
+summary(df_final$BNP[df_final$BNP_NT_Pro %in% 1]) # should be between 0 and 40000
+
+```
 
 
 
