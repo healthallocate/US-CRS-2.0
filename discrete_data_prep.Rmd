@@ -175,6 +175,10 @@ df_final <- df_final %>%
       is.na(HemoHemoglobin) & CAN_GENDER == 'F' ~ 13.3,
       TRUE ~ HemoHemoglobin
     ),
+    BNP_NT_Pro = case_when(
+      is.na(BNP_NT_Pro) ~ 0,
+      TRUE ~ BNP_NT_Pro
+    ),
     BNP = case_when(
       is.na(BNP) & BNP_NT_Pro == '0' ~ median(BNP[BNP_NT_Pro == '0'], na.rm = TRUE),
       is.na(BNP) & BNP_NT_Pro == '1' ~ median(BNP[BNP_NT_Pro == '1'], na.rm = TRUE),
