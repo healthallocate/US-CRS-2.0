@@ -41,6 +41,7 @@ RData_file_loaded = FALSE
 
 # change this variable to load in a different release of the SAF
 curr_data_release = "pubsaf2403"
+# curr_data_release = "//srtr-fs-p01/SAF/External/Pub_SAF/saf2403_Q1/pubsaf2403"
 
 if (RData_file_loaded == FALSE) {
   start_time = Sys.time()
@@ -60,6 +61,8 @@ if (RData_file_loaded == FALSE) {
   
   stat_just_hr1b = read_sas(here::here(curr_data_release, "statjust_hr1b.sas7bdat"), NULL) %>%  
     zap_formats() %>% zap_labels()
+  
+  # curr_data_release = "//srtr-fs-p01/SAF/Internal/SAF2403/thor/ThoracicRegistration"
   
   just_form_hr = read_sas(here::here(curr_data_release, "JustFormHR.sas7bdat"), NULL) %>%  
     zap_formats() %>% zap_labels()
@@ -104,20 +107,22 @@ if (RData_file_loaded == FALSE) {
     read_sas(here::here(curr_data_release, "TableDescriptions.sas7bdat"), NULL) %>%  
     zap_formats() %>% zap_labels()
   
-  raw_data_filename = "pubsaf2309_raw_heart_data.RData"
+  raw_data_filename = "pubsaf2403_raw_heart_data.RData"
   
   save(cand_thor, column_descriptions, just_form_hr, just_form_hr_data_link,
        just_form_hr_stat1, just_form_hr_stat2, just_form_hr_stat3,
        just_form_hr_stat4, risk_strat_data_hr, stat_just_hr1a, stat_just_hr1b,
        stathist_thor, status_just_episode, table_descriptions, 
        thor_support_device, tx_hr, 
+       # file = here::here(raw_data_filename))
        file = here::here(curr_data_release, raw_data_filename))
 } else {
   start_time = Sys.time()
 
-  raw_data_filename = "pubsaf2309_raw_heart_data.RData"
+  raw_data_filename = "pubsaf2403_raw_heart_data.RData"
 
-  load(here::here(curr_data_release, raw_data_filename))  
+  load(here::here(curr_data_release, raw_data_filename))
+  # load(here::here(raw_data_filename))
 }
 
 
@@ -153,6 +158,13 @@ risk_strat_data_hr = risk_strat_data_hr %>%
   # select(-(ends_with("Type"))) %>%
   select(-(ends_with("Perf"))) %>%
   relocate(ChangeDt:PX_ID)
+
+# how does ChangeDate compare with BeginDate and EndDate?
+tmp = risk_strat_data_hr %>% select(ChangeDt,JustId) %>%
+  left_join(status_just_episode,by="JustId")
+head(tmp)
+# form is submitted before it goes into effect, so ChangeDt always before BeginDate
+with(tmp,summary(as.numeric(ChangeDt-BeginDate,units="days")))
 
 # right_join to filter out erroneous forms, as above
 just_form_hr_data_link = just_form_hr_data_link %>%
@@ -498,7 +510,6 @@ just_stat4 = just_stat4 %>%
   distinct(across(-JustId), .keep_all = TRUE) %>% 
   mutate(across(ends_with("Dt"), ~ floor_date(.x, unit = "day")))
 
-
 risk_strat = risk_strat %>%
   mutate(across(ends_with("Dt"), ~ floor_date(.x, unit = "day"))) %>%
   
@@ -527,7 +538,7 @@ risk_strat = risk_strat %>%
   mutate(unique_event = event) %>% 
   ungroup() %>% 
   pivot_wider(names_from = event, values_from = date) %>% 
-
+  
   # risk_strat variables
   mutate(across(starts_with("CPTest"), ~ case_when(!is.na(CPTestDt) ~ .))) %>% 
   mutate(across(starts_with("Hemo"), ~ case_when(!is.na(HemoDt) ~ .))) %>%
@@ -947,7 +958,7 @@ full_list = full_list %>%
   group_by(PX_ID, unique_date) %>%
   fill(everything(), .direction = "downup") %>%
   distinct(PX_ID, unique_date, unique_event, .keep_all = TRUE) %>%   
-
+  
   # necessary for filling steps below
   arrange(PX_ID, unique_date) %>%
 
