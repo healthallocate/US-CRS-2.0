@@ -1285,9 +1285,14 @@ df %>% select(PX_ID, t_start, t_stop, transplant)
 
 df = df %>% group_by(PX_ID) %>%
   mutate(transplant = cumsum(cumsum(transplant)),
+         # follow to last unique date after transplant: REC_DISCHRG_DT, TFL_LAST_FU_DT, death date, TFL_GRAFT_DT
          t_stop = ifelse(transplant == 1, last(t_stop), t_stop))
 
-
+df %>%
+  filter(transplant > 1,row_number()==n()) %>%
+  ungroup() %>%
+  count(unique_event) %>% as.data.frame
+  
 df %>% 
   filter(transplant > 0) %>%
   select(PX_ID, unique_event, t_start, t_stop, transplant) %>%
@@ -1342,12 +1347,17 @@ paste0('Percent Transplanted: ',
 df = df %>% mutate(
   outcome = ifelse(!is.na(death_time) & t_stop == death_time, 1, 0)
 )
-
-
 df = df %>% filter(transplant <= 1 & t_start != t_stop) %>% 
   ungroup()
 
 
+# need to get rid of rows after outcome=1
+df %>% filter(PX_ID==1563284) %>%
+  select(PX_ID,unique_event,unique_date,t_start,t_stop,death_date_max,death_time,outcome,transplant)
+df %>% group_by(PX_ID) %>% mutate(outcome=cumsum(cumsum(outcome))) %>% ungroup() %>% count(outcome)
+
+# get rid of rows after outcome=1
+df = df %>% group_by(PX_ID) %>% filter(cumsum(cumsum(outcome))<=1) %>% ungroup()
 ```
 
 
@@ -1493,11 +1503,10 @@ df %>% select(PX_ID, CANHX_STAT_CD, RequestedCandStatCd, status)
 
 ```{r, warning=F, comment=NA, message=F}
 
-
-df$BNP_NT_Pro = 0
-df$BNP_NT_Pro[df$PX_ID %in%
-                unique(risk_strat$PX_ID[risk_strat$HrSevFailNtBnpType == 'NT Pro BNP'])] = 1
-
+# indicator of BNP NT Pro
+df = df %>%
+  mutate(BNP_NT_Pro = ifelse(HrSevFailNtBnpType=='NT Pro BNP',1,0))
+df %>% filter(!is.na(BNP),is.na(HrSevFailNtBnpType)) %>% nrow()
 
 ### Assume sodium < 100 is a data entry error
 df$sodium = as.numeric(df$sodium)
@@ -1535,7 +1544,7 @@ cand_list %>% filter(PX_ID == 1271711) %>% select(CAN_VAD1)
 
 # Select variables for final dataframe
 ```{r}
-df = df %>% select(PX_ID, CAN_LISTING_CTR_CD, unique_event, unique_date, t_start, t_stop, status_criteria, status, Exception, transplant, outcome, age_at_listing, systolicBP, PCWP, PASP, PADP, resting_HR, diastolicBP, central_venous_pressure, cardiac_output, arterial_lactate, AST, creatinine, bilirubin, albumin, sodium, BNP, HemoHemoglobin, LDH, BUN, INR, CAN_REM_CD, diagnosis, diabetes, dialysis, CAN_PERIPH_VASC, ECMO, temp_surg_LVAD, BiVAD_no_discharge, durable_LVAD, RVAD, BiVAD, BNP_NT_Pro, last_active_date, last_inactive_date,  transplant_time, death_time, removal_time, status_initial)
+df = df %>% select(PX_ID, CAN_LISTING_CTR_CD, unique_event, unique_date, t_start, t_stop, JustId, status_criteria, status, Exception, transplant, outcome, age_at_listing, systolicBP, PCWP, PASP, PADP, resting_HR, diastolicBP, central_venous_pressure, cardiac_output, arterial_lactate, AST, creatinine, bilirubin, albumin, sodium, BNP, HemoHemoglobin, LDH, BUN, INR, CAN_REM_CD, diagnosis, diabetes, dialysis, CAN_PERIPH_VASC, ECMO, temp_surg_LVAD, BiVAD_no_discharge, durable_LVAD, RVAD, BiVAD, BNP_NT_Pro, last_active_date, last_inactive_date,  transplant_time, death_time, removal_time, status_initial)
 
 
 save(df, file = "heart_post_policy.RData")
