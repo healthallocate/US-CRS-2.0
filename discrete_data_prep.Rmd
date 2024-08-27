@@ -26,7 +26,7 @@ library(lubridate)
 
 # Subset to cohort
 df2 <- subset(df, df$t_start == '0' & as.Date(df$unique_date) >= '2019-01-01' & 
-                as.Date(df$unique_date) <= '2022-12-31')
+                as.Date(df$unique_date) <= '2023-12-31')
 postpolicy_id <- unique(df2$PX_ID)
 rm(df2)
 df <- df[which(df$PX_ID %in% postpolicy_id), ]
