@@ -1544,7 +1544,7 @@ cand_list %>% filter(PX_ID == 1271711) %>% select(CAN_VAD1)
 
 # Select variables for final dataframe
 ```{r}
-df = df %>% select(PX_ID, CAN_LISTING_CTR_CD, unique_event, unique_date, t_start, t_stop, JustId, status_criteria, status, Exception, transplant, outcome, age_at_listing, systolicBP, PCWP, PASP, PADP, resting_HR, diastolicBP, central_venous_pressure, cardiac_output, arterial_lactate, AST, creatinine, bilirubin, albumin, sodium, BNP, HemoHemoglobin, LDH, BUN, INR, CAN_REM_CD, diagnosis, diabetes, dialysis, CAN_PERIPH_VASC, ECMO, temp_surg_LVAD, BiVAD_no_discharge, durable_LVAD, RVAD, BiVAD, BNP_NT_Pro, last_active_date, last_inactive_date,  transplant_time, death_time, removal_time, status_initial)
+df = df %>% select(PX_ID, CAN_LISTING_CTR_CD, unique_event, unique_date, t_start, t_stop, status, JustId, RequestedCandStatCd, status_criteria, Exception, transplant, outcome, age_at_listing, systolicBP, PCWP, PASP, PADP, resting_HR, diastolicBP, central_venous_pressure, cardiac_output, arterial_lactate, AST, creatinine, bilirubin, albumin, sodium, BNP, HemoHemoglobin, LDH, BUN, INR, CAN_REM_CD, diagnosis, diabetes, dialysis, CAN_PERIPH_VASC, ECMO, temp_surg_LVAD, BiVAD_no_discharge, durable_LVAD, RVAD, BiVAD, BNP_NT_Pro, last_active_date, last_inactive_date,  transplant_time, death_time, removal_time, status_initial)
 
 
 save(df, file = "heart_post_policy.RData")
