@@ -24,9 +24,13 @@ library(dplyr)
 library(tidyr)
 library(lubridate)
 
+# change these variables to customize inclusion criteria - see heart_pipeline_final.rmd
+filter_date_start = mdy("01-01-2019")
+censor_date_end = mdy("12-31-2023")
+
 # Subset to cohort
-df2 <- subset(df, df$t_start == '0' & as.Date(df$unique_date) >= '2019-01-01' & 
-                as.Date(df$unique_date) <= '2023-12-31')
+df2 <- subset(df, df$t_start == '0' & as.Date(df$unique_date) >= filter_date_start & 
+                as.Date(df$unique_date) <= censor_date_end)
 postpolicy_id <- unique(df2$PX_ID)
 rm(df2)
 df <- df[which(df$PX_ID %in% postpolicy_id), ]
@@ -39,10 +43,12 @@ df = df %>% mutate(can_listing_dt = if_else(grepl("CAN_LISTING_DT", unique_event
 ## Censor candidates past December 31st, 2023
 ```{r}
 df = df  %>% 
-  filter(unique_date <= mdy("12-31-2023")) %>% 
+  filter(unique_date <= censor_date_end) %>% 
   group_by(PX_ID) %>%
   mutate(
-    t_stop = ifelse(row_number() == n() & t_stop - t_start >  mdy("12-31-2023") - as.Date(unique_date), t_start + mdy("12-31-2023") - as.Date(unique_date), t_stop)
+    need_to_censor = row_number() == n() & t_stop - t_start >  censor_date_end - as.Date(unique_date),
+    t_stop = ifelse(need_to_censor, t_start + censor_date_end - as.Date(unique_date), t_stop),
+    outcome = ifelse(need_to_censor, 0, outcome)
   )
 # we have recoded t_stop for candidates censored on 12/31/2023 but have not recoded outcome to be 0 if the death date is after 12/31/2023
 
@@ -51,9 +57,23 @@ df = df  %>%
 ## Identify candidates who were delisted
 ## Determine time to death / censor for these candidates
 ```{r}
+ # only one person with rows/death after removal
+df %>% filter(cumsum(cumsum(grepl("CAN_REM_DT", unique_event)))>1) %>% select(PX_ID,unique_event,outcome)
+
+# create delisting indicator
 df = df %>% mutate(
   delisting = ifelse(grepl("CAN_REM_DT", unique_event) & !grepl("REC_TX_DT", unique_event), 1, 0)
-) %>% mutate(
+)
+
+# similar to row from transplant to death/censoring, make one row from delisting to death
+df = df %>% group_by(PX_ID) %>%
+  mutate(delisting = cumsum(cumsum(delisting)),
+         t_stop = ifelse(delisting == 1, last(t_stop), t_stop),
+         outcome = ifelse(delisting == 1, last(outcome), outcome)) %>%
+  filter(delisting <= 1)
+
+# make time from delisting to death/censor
+df = df %>% mutate(
   time_until_death_after_delisting = ifelse(delisting == 1 & outcome == 1, t_stop - t_start, NA),
   time_until_censor_after_delisting = ifelse(delisting == 1 & outcome == 0, t_stop - t_start, NA)) %>% group_by(PX_ID) %>% fill(time_until_death_after_delisting, time_until_censor_after_delisting, .direction = "up")
 
