@@ -15,6 +15,16 @@ library(dplyr)
 library(splines)
 library(tidyr)
 library(ggplot2)
+
+# recode outcome as 0 if patient received transplant
+## want outcome to be an indicator of pretx death
+df_final = df_final %>%
+  group_by(PX_ID) %>%
+  mutate(any_tx=any(transplant==1)) %>%
+  ungroup() %>%
+  mutate(outcome = ifelse(any_tx,0,outcome))
+df_final %>% filter(outcome==1 | !is.na(time_until_death_after_delisting)) %>% distinct(PX_ID) %>% nrow() # 1311 - yay!
+
 ```
 
 # Split data into training / testing sets
@@ -54,7 +64,7 @@ train_data = train_data %>% mutate(
   
 train_data = train_data %>%  # Ensure duplicate_amount is at least 1
   slice(rep(row_number(), duplicate_amount+1)) %>% relocate(duplicate_amount, .after = CAN_LISTING_CTR_CD)
-
+train_data %>% select(PX_ID,week,interval_start,interval_stop,duplicate_amount,transplant,outcome) %>% head(12)
 ```
 
 
@@ -65,6 +75,7 @@ train_data = train_data %>%  # Ensure duplicate_amount is at least 1
 # Depending on whether the week is even or odd, this translates to 4 or 5 weeks of follow up after delisting
 # If candidates dies more than 4/5 weeks after delisting, they are censored
 
+## working
 train_data = train_data %>% group_by(PX_ID) %>% mutate(
   time_until_censor_after_delisting = case_when(
     !is.na(time_until_censor_after_delisting) & n() %% 2 == 0 ~ 28,
