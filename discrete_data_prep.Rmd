@@ -50,8 +50,13 @@ df = df  %>%
     t_stop = ifelse(need_to_censor, t_start + censor_date_end - as.Date(unique_date), t_stop),
     outcome = ifelse(need_to_censor, 0, outcome)
   )
-# we have recoded t_stop for candidates censored on 12/31/2023 but have not recoded outcome to be 0 if the death date is after 12/31/2023
+table(df$t_stop >= df$t_start)
 
+# some numbers
+dim(table(df$PX_ID)) # 21100
+table(df$transplant) # 15336
+table(df$outcome) # 3149 - includes posttx
+df %>% mutate(any_tx=any(transplant==1)) %>% ungroup() %>% filter(outcome==1,!any_tx) %>% nrow() # 1311 pretx deaths
 ```
 
 ## Identify candidates who were delisted
@@ -75,7 +80,16 @@ df = df %>% group_by(PX_ID) %>%
 # make time from delisting to death/censor
 df = df %>% mutate(
   time_until_death_after_delisting = ifelse(delisting == 1 & outcome == 1, t_stop - t_start, NA),
-  time_until_censor_after_delisting = ifelse(delisting == 1 & outcome == 0, t_stop - t_start, NA)) %>% group_by(PX_ID) %>% fill(time_until_death_after_delisting, time_until_censor_after_delisting, .direction = "up")
+  time_until_censor_after_delisting = ifelse(delisting == 1 & outcome == 0, censor_date_end - t_start, NA)) %>% group_by(PX_ID) %>% fill(time_until_death_after_delisting, time_until_censor_after_delisting, .direction = "up")
+
+# including posttx deaths in time_until_death_after_delisting? no
+df %>% filter(transplant==1,!is.na(time_until_death_after_delisting)) %>% nrow()
+
+# censoring anyone who dies? no
+df %>% filter(outcome==1,!is.na(time_until_censor_after_delisting)) %>% nrow()
+
+# count transplant, death, delisting
+df %>% ungroup() %>% count(transplant,delisting,outcome)
 
 ```
 
@@ -106,7 +120,26 @@ df <- df %>%
 # create tx dataset
 # remove rows at time of transplant, removal
 df_tx = df %>% filter(transplant == 1 | (CAN_REM_CD == 4 & grepl("CAN_REM_DT",unique_event)))
-df = df %>% filter(cumsum(grepl("CAN_REM_DT", unique_event))<1)
+df = df %>% filter(cumsum(grepl("CAN_REM_DT", unique_event))<1 |
+                     n()==1)
+
+# count up transplants, deaths
+dim(table(df$PX_ID)) # 21100
+nrow(df_tx) # 15336
+df %>% filter(!is.na(time_until_death_after_delisting) | outcome==1) %>% distinct(PX_ID) %>% nrow() # 1313 - two extra bc of posttx deaths (outcome=1 then transplant=1)
+
+# look at people with t_start = t_stop
+df %>% filter(t_start==t_stop) %>%
+  select(PX_ID,unique_event,unique_date,t_start,t_stop,death_time,outcome,transplant)
+df %>% filter(t_start==t_stop,n()!=1) %>%
+  select(PX_ID,unique_event,unique_date,t_start,t_stop,death_time,outcome,transplant)
+
+# recode t_stop as 1 if t_stop=0
+## otherwise, remove when t_start=t_stop
+df = df %>%
+  mutate(t_stop=ifelse(t_stop==0,1,t_stop)) %>%
+  filter(t_start!=t_stop)
+dim(table(df$PX_ID)) # 21100
 
 # define period to group observations that occur within the same week
 # take first observation within each week
@@ -116,6 +149,8 @@ df = df %>% filter(cumsum(grepl("CAN_REM_DT", unique_event))<1)
 df_final = df %>% mutate(
   period = ceiling(t_stop/7)
 ) %>% group_by(PX_ID, period) %>% 
+  # make outcome=1 for entire week if outcome=1
+  mutate(outcome = ifelse(sum(outcome)>0,1,outcome)) %>%
   # taking the first row per week
   filter(row_number() == 1) %>% 
   mutate(
@@ -127,6 +162,7 @@ df_final = df %>% mutate(
   mutate(interval_start = seq(0, max(t_stop) - 7, by = 7),
                              interval_stop = interval_start + 7) %>%
   ungroup()
+df_final %>% filter(!is.na(time_until_death_after_delisting) | outcome==1) %>% distinct(PX_ID) %>% nrow() # 1313 - two extra bc of posttx deaths (outcome=1 then transplant=1)
 
 df_final
 
@@ -305,6 +341,11 @@ df_final = df_final %>% mutate(
 
 # Save discrete time data
 ```{r}
+# check numbers
+dim(table(df_final$PX_ID)) # 21100
+table(df_final$transplant) # 15336
+df_final %>% filter(outcome==1 | !is.na(time_until_death_after_delisting)) %>% distinct(PX_ID) %>% nrow() # 1313
+table(df_final$interval_start < df_final$interval_stop)
 save("df_final", file =  "discrete_final_data.RData")
 ```
 

@@ -1347,17 +1347,88 @@ paste0('Percent Transplanted: ',
 df = df %>% mutate(
   outcome = ifelse(!is.na(death_time) & t_stop == death_time, 1, 0)
 )
-df = df %>% filter(transplant <= 1 & t_start != t_stop) %>% 
+save(df,file="heart_progress.Rdata")
+
+# what's going on when t_start = t_stop?
+
+## some of these are recent transplants w/ no follow-up visit yet, OR transplant recipients who died on date of transplant
+df %>% filter(transplant==1,t_start==t_stop) %>% select(PX_ID,unique_event,unique_date,t_start,t_stop,transplant,outcome)
+
+## also, delistings that died on date of delisting or have not died yet
+df %>% ungroup() %>% filter(grepl("CAN_REM_DT",unique_event),transplant==0,t_start==t_stop) %>%
+  select(PX_ID,unique_event,unique_date,t_start,t_stop,transplant,outcome)
+
+# these delistings are always the last row
+df %>% filter(any(grepl("CAN_REM_DT", unique_event) & transplant==0 & t_start==t_stop & row_number()!=n())) %>% nrow()
+
+# what's going on with rows after delisting when there was no death?
+## note: these censoring times are just data byproducts, eg ChangeDt after removal
+df %>% filter(any(grepl("CAN_REM_DT", unique_event) & transplant==0 & t_start!=t_stop & outcome!=1),t_start>=removal_time) %>%
+  select(PX_ID,unique_event,unique_date,t_start,t_stop,transplant,outcome,removal_time,death_time)
+
+# look at a few specific ids
+df %>% filter(PX_ID %in% c(1471218,1526025,1337428)) %>%
+  slice(n()-2,n()-1,n()) %>%
+  select(PX_ID,unique_event,unique_date,t_start,t_stop,transplant,outcome,removal_time,death_time)
+
+# how many PX_IDs?
+dim(table(df$PX_ID))
+# 21100
+
+# how many transplants?
+table(df$transplant==1,useNA="ifany")
+# 15516
+
+# how many deaths? including some posttransplant deaths from OPTN
+df %>% filter(transplant<=1,outcome==1) %>% distinct(PX_ID) %>% nrow()
+# 3224
+
+# how many delistings?
+df %>% filter(transplant==0,outcome==0,grepl("CAN_REM_DT",unique_event)) %>% nrow()
+# 2249
+
+## WARNING - This is removing delistings w/o death dates (delisting=1, transplant=0, outcome=0) that we want to follow after removal 
+tmp1 = df %>% filter(transplant <= 1 & t_start != t_stop) %>% 
   ungroup()
 
+# instead, keep rows that correspond to a transplant or delisting (not for death or tx) even if t_start=t_stop
+tmp2 = df %>% filter(transplant <= 1 &
+                      ((t_start==t_stop & transplant==1) |
+                         (t_start==t_stop & grepl("CAN_REM_DT",unique_event) & transplant==0 & outcome==0) |
+                         (t_start!=t_stop) |
+                         n() == 1))
+dim(table(tmp2$PX_ID)) # 21100
+table(tmp2$transplant) # 15516
+table(tmp2$outcome) # 3241 - too many
+tmp2 %>% filter(transplant==0,outcome==0,grepl("CAN_REM_DT",unique_event)) %>% nrow() # 2249
 
-# need to get rid of rows after outcome=1
-df %>% filter(PX_ID==1563284) %>%
-  select(PX_ID,unique_event,unique_date,t_start,t_stop,death_date_max,death_time,outcome,transplant)
-df %>% group_by(PX_ID) %>% mutate(outcome=cumsum(cumsum(outcome))) %>% ungroup() %>% count(outcome)
+# problem: a person can have multiple deaths, if death was on same day as transplant
+tmp2 %>% filter(sum(outcome)>1) %>%
+  slice(n()-1,n()) %>%
+  select(PX_ID,unique_event,unique_date,t_start,t_stop,transplant,outcome,removal_time,death_time)
 
-# get rid of rows after outcome=1
-df = df %>% group_by(PX_ID) %>% filter(cumsum(cumsum(outcome))<=1) %>% ungroup()
+# make only one death per px_id
+tmp2 = tmp2 %>%
+  mutate(outcome = ifelse(sum(outcome)>1 & outcome==1 & row_number() != n() & t_stop==lead(t_stop),0,outcome))
+table(tmp2$outcome,useNA="ifany") # 3224
+
+# need to get rid of rows after outcome=1, without losing transplants
+tmp2 %>% mutate(outcome_cs=cumsum(cumsum(outcome))) %>% filter(any(outcome_cs>1)) %>%
+  slice(n()-1,n()) %>%
+  select(PX_ID,unique_event,unique_date,t_start,t_stop,death_date_max,death_time,outcome,outcome_cs,transplant)
+
+# get rid of rows after outcome=1 unless transplant=1
+tmp2 = tmp2 %>% 
+  filter(cumsum(cumsum(outcome))<=1 | transplant==1) %>% 
+  ungroup()
+dim(table(tmp2$PX_ID)) # 21100
+table(tmp2$transplant) # 15516
+table(tmp2$outcome) # 3224
+tmp2 %>% filter(transplant==0,outcome==0,grepl("CAN_REM_DT",unique_event)) %>% nrow() # 2248 now, instead of 2249
+
+# save as df
+df = tmp2
+
 ```
 
 
@@ -1544,6 +1615,7 @@ cand_list %>% filter(PX_ID == 1271711) %>% select(CAN_VAD1)
 
 # Select variables for final dataframe
 ```{r}
+save(df, file="heart_post_policy_full.Rdata")
 df = df %>% select(PX_ID, CAN_LISTING_CTR_CD, unique_event, unique_date, t_start, t_stop, status, JustId, RequestedCandStatCd, status_criteria, Exception, transplant, outcome, age_at_listing, systolicBP, PCWP, PASP, PADP, resting_HR, diastolicBP, central_venous_pressure, cardiac_output, arterial_lactate, AST, creatinine, bilirubin, albumin, sodium, BNP, HemoHemoglobin, LDH, BUN, INR, CAN_REM_CD, diagnosis, diabetes, dialysis, CAN_PERIPH_VASC, ECMO, temp_surg_LVAD, BiVAD_no_discharge, durable_LVAD, RVAD, BiVAD, BNP_NT_Pro, last_active_date, last_inactive_date,  transplant_time, death_time, removal_time, status_initial)
 
 
