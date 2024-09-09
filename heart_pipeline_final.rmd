@@ -1347,7 +1347,7 @@ paste0('Percent Transplanted: ',
 df = df %>% mutate(
   outcome = ifelse(!is.na(death_time) & t_stop == death_time, 1, 0)
 )
-save(df,file="heart_progress.Rdata")
+save(df,file="heart_progress.RData")
 
 # what's going on when t_start = t_stop?
 
