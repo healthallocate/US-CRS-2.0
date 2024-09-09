@@ -80,7 +80,7 @@ df = df %>% group_by(PX_ID) %>%
 # make time from delisting to death/censor
 df = df %>% mutate(
   time_until_death_after_delisting = ifelse(delisting == 1 & outcome == 1, t_stop - t_start, NA),
-  time_until_censor_after_delisting = ifelse(delisting == 1 & outcome == 0, censor_date_end - t_start, NA)) %>% group_by(PX_ID) %>% fill(time_until_death_after_delisting, time_until_censor_after_delisting, .direction = "up")
+  time_until_censor_after_delisting = ifelse(delisting == 1 & outcome == 0, censor_date_end - as.Date(unique_date), NA)) %>% group_by(PX_ID) %>% fill(time_until_death_after_delisting, time_until_censor_after_delisting, .direction = "up")
 
 # including posttx deaths in time_until_death_after_delisting? no
 df %>% filter(transplant==1,!is.na(time_until_death_after_delisting)) %>% nrow()
@@ -144,6 +144,7 @@ dim(table(df$PX_ID)) # 21100
 # define period to group observations that occur within the same week
 # take first observation within each week
 # duplicate each observation based on how many days there are until the next period
+  ## duplication causes some people to have outcome=1 multiple times, if the interval ending in death lasted >1 week
 # define interval_start, interval_stop as the 7 day periods
 
 df_final = df %>% mutate(
