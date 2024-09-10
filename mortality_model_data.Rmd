@@ -395,13 +395,32 @@ ggplot(combined_df %>% distinct(PX_ID,landmark),aes(2*(landmark-1))) +
 
 ## Mortality model without weights
 ```{r}
-
 mortality_model_no_weights = glm(formula = as.formula(
   outcome ~ 
     albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1):as.character(BNP_NT_Pro_at_start) + as.character(BNP_NT_Pro_at_start) + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + cpo_at_start + api_at_start + papi_at_start), data = combined_df, family = binomial)
 
-
 summary(mortality_model_no_weights)
+
+# for landmark model, use robust SEs (bc of repeat observations from same px_id)
+## also known as GEE with working independence model
+library(sandwich)
+mortality_model_no_weights_VCOV = vcovCL(mortality_model_no_weights, cluster = ~ PX_ID)
+sqrt(diag(mortality_model_no_weights_VCOV))
+summary(mortality_model_no_weights)$coef[,"Std. Error"]
+
+# summary with robust CIs
+mortality_model_no_weights_sum = do.call(rbind.data.frame,lapply(names(coef(mortality_model_no_weights)),function(var_interest) {
+  bind_cols(var=var_interest,getHR(mortality_model_no_weights,vars=var_interest,cov=mortality_model_no_weights_VCOV))
+}))
+
+# first landmark only (from listing) - just curious
+mortality_model_no_weights1 = glm(formula = as.formula(
+  outcome ~ 
+    albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1):as.character(BNP_NT_Pro_at_start) + as.character(BNP_NT_Pro_at_start) + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + cpo_at_start + api_at_start + papi_at_start), data = subset(combined_df,landmark==1), family = binomial)
+mortality_model_no_weights1
+sqrt(diag(vcovCL(mortality_model_no_weights1, cluster = ~ PX_ID)))
+summary(mortality_model_no_weights1)$coef[,"Std. Error"] # robust vs model-based variance are similar with only one landmark, which is as expected bc there is technically no correlated data with one landmark, just nonoverlapping survival intervals
+
 ```
 
 ```{r}
@@ -440,18 +459,50 @@ mortality_model_weights = glm(formula = as.formula(
 
 
 mortality_model_weights
+
+# summary with robust CIs
+## note: the weighted model needs robust SEs whether we stack landmarks or not
+mortality_model_weights_VCOV = vcovCL(mortality_model_weights, cluster = ~ PX_ID)
+mortality_model_weights_sum = do.call(rbind.data.frame,lapply(names(coef(mortality_model_weights)),function(var_interest) {
+  bind_cols(var=var_interest,getHR(mortality_model_weights,vars=var_interest,cov=mortality_model_weights_VCOV))
+}))
+
+# compare unweighted and weighted
+plotdat = bind_rows(mortality_model_no_weights_sum %>% mutate(model="Unweighted"),
+          mortality_model_weights_sum %>% mutate(model="Weighted"))
+ggplot(plotdat %>% filter(var!="(Intercept)"),
+       aes(x = log(hr), y = var, color = model)) +
+  geom_point(position = position_dodge(width = 0.5)) +
+  geom_errorbarh(aes(xmin = log(lowCI), xmax = log(highCI)), height = 0.2, position = position_dodge(width = 0.5)) +
+  labs(x = "Coefficient Estimate", y = "Term", title = "Model Coefficients") +
+  geom_vline(xintercept=0) +
+  ## zoom in:
+  # coord_cartesian(xlim=c(-1,1)) +
+  theme_minimal()
 ```
 
 
 
 ## Check distribution by mcs variable
 ```{r}
-short_mcs = combined_df %>% filter(short_MCS_ever == 1)
-no_short_mcs = combined_df %>% filter(short_MCS_ever == 0)
+short_mcs = combined_df %>% filter(short_mcs_ever_at_start == 1)
+no_short_mcs = combined_df %>% filter(short_mcs_ever_at_start == 0)
 
 summary(short_mcs$weight)
 summary(no_short_mcs$weight)
+
+# weights increase the most in short-term MCS who do not die, and no-short-term MCS who die
+short_mcs %>% group_by(PX_ID,landmark) %>%
+  mutate(diff=last(weight)-first(weight)) %>%
+  slice(n()) %>%
+  ungroup() %>% with(.,tapply(diff,outcome,summary))
+no_short_mcs %>% group_by(PX_ID,landmark) %>%
+  mutate(diff=last(weight)-first(weight)) %>%
+  slice(n()) %>%
+  ungroup() %>% with(.,tapply(diff,outcome,summary))
+
 ```
+
 ## Truncate weights and rerun model
 ```{r}
 combined_df = combined_df %>% mutate(
