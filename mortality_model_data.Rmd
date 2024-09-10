@@ -16,6 +16,9 @@ library(splines)
 library(tidyr)
 library(ggplot2)
 
+# source functions.R
+source("functions.R")
+
 # recode outcome as 0 if patient received transplant
 ## want outcome to be an indicator of pretx death
 df_final = df_final %>%
