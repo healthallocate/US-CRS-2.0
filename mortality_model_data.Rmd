@@ -178,6 +178,35 @@ train_data = train_data %>% ungroup() %>% mutate(
   prob_no_tx = 1 - predict(tx_status_hemo_model, newdata = train_data, type = "response"))
 
 
+## create numerator of stabilized weights ##
+# we want Pr(transplant) given variables at start of 6-week window
+# for simplicity (and to avoid correlated data), we will do this in nonoverlapping 6-week windows of df_final
+
+# create 6-week windows of df_final
+df_final = df_final %>%
+  group_by(PX_ID) %>%
+  mutate(window=ceiling(row_number()/6)) %>%
+  ungroup()
+df_final %>% select(PX_ID,interval_start,interval_stop,transplant,window) %>% head(20)
+df_final = df_final %>%
+  group_by(PX_ID,window) %>%
+  mutate(albumin_at_start = first(albumin),
+         bilirubin_at_start = first(bilirubin),
+         eGFR_at_start = first(eGFR),
+         sodium_at_start = first(sodium),
+         BNP_at_start = first(BNP),
+         BNP_NT_Pro_at_start = first(BNP_NT_Pro),
+         durable_LVAD_at_start = first(durable_LVAD),
+         short_mcs_ever_at_start = first(short_MCS_ever)) %>%
+  ungroup()
+
+# fit transplant model
+## just US-CRS variables bc anything in this numerator model has to be in the mortality model
+tx_model_first = glm(formula = as.formula(
+   transplant ~ 
+    ns(albumin_at_start, df = 3) + ns(bilirubin_at_start, df = 3) + ns(eGFR_at_start, df = 3) + ns(sodium_at_start, df = 3) + ns(BNP_at_start, df = 3)*BNP_NT_Pro_at_start + durable_LVAD_at_start + short_mcs_ever_at_start), data = df_final, family = binomial)
+summary(tx_model_first)
+
 ```
 
 ## Adjust transplant and prob_no_tx variables
@@ -338,11 +367,23 @@ combined_df = combined_df %>% group_by(PX_ID, landmark) %>% mutate(
   api_at_start = first(api),
   papi_at_start = first(papi)
 )
+
+# calculate numerator for stabilized weights
+combined_df = combined_df %>% ungroup() %>% mutate(
+  prob_no_tx_start = 1 - predict(tx_model_first, newdata = combined_df, type = "response"),
+  prob_no_tx_start = ifelse(delisting2>1,1,prob_no_tx_start))
+with(combined_df,table(prob_no_tx==1,prob_no_tx_start==1))
+
+# Create stabilized weight variable based on prob_no_tx and prob_no_tx_start
+combined_df = combined_df %>% group_by(PX_ID, landmark) %>% mutate(
+  sweight = cumprod(prob_no_tx_start)/(cumprod(prob_no_tx))
+)
 ```
 
 ## Overall distribution of weights
 ```{r}
 summary(combined_df$weight)
+summary(combined_df$sweight)
 
 # some people missing weights; these are people with weird statuses?
 combined_df %>% filter(is.na(weight)) %>%
@@ -360,6 +401,7 @@ combined_df = combined_df %>% mutate(
 combined_df %>% select(PX_ID, landmark, week, week_in_landmark)
 
 with(combined_df,tapply(weight,week_in_landmark,summary))
+with(combined_df,tapply(sweight,week_in_landmark,summary))
 
 # distribution_1 = subset(combined_df, week_in_landmark == 1)
 # distribution_2 = subset(combined_df, week_in_landmark == 2)
@@ -454,7 +496,7 @@ uscrs_model
 
 ```
 
-## Mortality model with weights
+## Mortality model with (unstabilized) weights
 ```{r}
 mortality_model_weights = glm(formula = as.formula(
   outcome ~ 
@@ -469,10 +511,27 @@ mortality_model_weights_VCOV = vcovCL(mortality_model_weights, cluster = ~ PX_ID
 mortality_model_weights_sum = do.call(rbind.data.frame,lapply(names(coef(mortality_model_weights)),function(var_interest) {
   bind_cols(var=var_interest,getHR(mortality_model_weights,vars=var_interest,cov=mortality_model_weights_VCOV))
 }))
+```
+
+## Mortality model with stabilized weights
+```{r}
+mortality_model_sweights = glm(formula = as.formula(
+  outcome ~ 
+    albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1):as.character(BNP_NT_Pro_at_start) + as.character(BNP_NT_Pro_at_start) + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + cpo_at_start + api_at_start + papi_at_start), data = combined_df, weights = sweight, family = binomial)
+
+
+mortality_model_sweights
+
+# summary with robust CIs
+mortality_model_sweights_VCOV = vcovCL(mortality_model_sweights, cluster = ~ PX_ID)
+mortality_model_sweights_sum = do.call(rbind.data.frame,lapply(names(coef(mortality_model_sweights)),function(var_interest) {
+  bind_cols(var=var_interest,getHR(mortality_model_sweights,vars=var_interest,cov=mortality_model_sweights_VCOV))
+}))
 
 # compare unweighted and weighted
 plotdat = bind_rows(mortality_model_no_weights_sum %>% mutate(model="Unweighted"),
-          mortality_model_weights_sum %>% mutate(model="Weighted"))
+          mortality_model_weights_sum %>% mutate(model="Unstabilized Weights"),
+          mortality_model_sweights_sum %>% mutate(model="Stabilized Weights"))
 ggplot(plotdat %>% filter(var!="(Intercept)"),
        aes(x = log(hr), y = var, color = model)) +
   geom_point(position = position_dodge(width = 0.5)) +
@@ -508,16 +567,46 @@ no_short_mcs %>% group_by(PX_ID,landmark) %>%
 
 ## Truncate weights and rerun model
 ```{r}
-combined_df = combined_df %>% mutate(
-  weight = ifelse(weight > 10, 10, weight)
-)
+# truncate stabilized weights at 1st and 99th
+combined_df = combined_df %>% group_by(week_in_landmark) %>% mutate(
+  tweight = ifelse(sweight > quantile(sweight,probs=.99,na.rm=T), 
+                   quantile(sweight,probs=.99,na.rm=T), sweight),
+  tweight = ifelse(sweight < quantile(sweight,probs=.01,na.rm=T), 
+                   quantile(sweight,probs=.01,na.rm=T), tweight)
+) %>% ungroup()
+summary(combined_df$sweight)
+summary(combined_df$tweight)
+# a little low; mean weight < 1
+with(combined_df,tapply(tweight,week_in_landmark,summary))
 
-mortality_model_weights = glm(formula = as.formula(
+mortality_model_tweights = glm(formula = as.formula(
   outcome ~ 
-    albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1):as.character(BNP_NT_Pro_at_start) + as.character(BNP_NT_Pro_at_start) + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + cpo_at_start + api_at_start + papi_at_start), data = combined_df, weights = weight, family = binomial)
+    albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1):as.character(BNP_NT_Pro_at_start) + as.character(BNP_NT_Pro_at_start) + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + cpo_at_start + api_at_start + papi_at_start), data = combined_df, weights = tweight, family = binomial)
 
 
-mortality_model_weights
+mortality_model_tweights
+
+# summary with robust CIs
+mortality_model_tweights_VCOV = vcovCL(mortality_model_tweights, cluster = ~ PX_ID)
+mortality_model_tweights_sum = do.call(rbind.data.frame,lapply(names(coef(mortality_model_tweights)),function(var_interest) {
+  bind_cols(var=var_interest,getHR(mortality_model_tweights,vars=var_interest,cov=mortality_model_tweights_VCOV))
+}))
+
+# compare unweighted and weighted
+plotdat = bind_rows(mortality_model_no_weights_sum %>% mutate(model="Unweighted"),
+          mortality_model_weights_sum %>% mutate(model="Unstabilized Weights"),
+          mortality_model_sweights_sum %>% mutate(model="Stabilized Weights"),
+          mortality_model_tweights_sum %>% mutate(model="Stabilized + Truncated Weights"))
+ggplot(plotdat %>% filter(var!="(Intercept)"),
+       aes(x = log(hr), y = var, color = model)) +
+  geom_point(position = position_dodge(width = 0.5)) +
+  geom_errorbarh(aes(xmin = log(lowCI), xmax = log(highCI)), height = 0.2, position = position_dodge(width = 0.5)) +
+  labs(x = "Coefficient Estimate", y = "Term", title = "Model Coefficients") +
+  geom_vline(xintercept=0) +
+  ## zoom in:
+  # coord_cartesian(xlim=c(-1,1)) +
+  theme_minimal()
+# in the bias-variance tradeoff, truncated stabilized weights seem to have too much bias, almost identical to unweighted
 ```
 
 ```{r}
