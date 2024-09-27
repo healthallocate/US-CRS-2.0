@@ -11,7 +11,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 # Molly:
 setwd("C:/Users/mhwhi/Downloads")
-load("heart_post_policy (4).RData")
+load("heart_post_policy (8).RData")
 df_cand_thor <- haven::read_sas('./pubsaf2403/cand_thor.sas7bdat')
 
 # Grace:
@@ -24,16 +24,10 @@ library(dplyr)
 library(tidyr)
 library(lubridate)
 
-# change these variables to customize inclusion criteria - see heart_pipeline_final.rmd
-filter_date_start = mdy("01-01-2019")
+# change this variable to customize inclusion criteria - see heart_pipeline_final.rmd
 censor_date_end = mdy("12-31-2023")
 
-# Subset to cohort
-df2 <- subset(df, df$t_start == '0' & as.Date(df$unique_date) >= filter_date_start & 
-                as.Date(df$unique_date) <= censor_date_end)
-postpolicy_id <- unique(df2$PX_ID)
-rm(df2)
-df <- df[which(df$PX_ID %in% postpolicy_id), ]
+
 
 # Retain listing date, transplant date for waiting time calculations
 df = df %>% mutate(can_listing_dt = if_else(grepl("CAN_LISTING_DT", unique_event), unique_date, NA),
@@ -53,16 +47,10 @@ df = df  %>%
 table(df$t_stop >= df$t_start)
 
 # some numbers
-dim(table(df$PX_ID)) # 21100
-table(df$transplant) # 15336
-table(df$outcome) # 3149 - includes posttx
-df %>% mutate(any_tx=any(transplant==1)) %>% ungroup() %>% filter(outcome==1,!any_tx) %>% nrow() # 1311 pretx deaths
-
-# when were the deaths?
-df %>% mutate(any_tx=any(transplant==1)) %>% ungroup() %>% filter(outcome==1,!any_tx) %>%
-  mutate(death_date = unique_date + days(t_stop - t_start)) %>%
-  select(PX_ID,unique_event,unique_date,t_start,t_stop,death_date) %>%
-  pull(death_date) %>% summary
+dim(table(df$PX_ID)) # 24516
+table(df$transplant) # 16963
+table(df$outcome) # 4045 - includes posttx
+df %>% mutate(any_tx=any(transplant==1)) %>% ungroup() %>% filter(outcome==1,!any_tx) %>% nrow() # 1926 pretx deaths
 ```
 
 ## Identify candidates who were delisted
@@ -130,9 +118,9 @@ df = df %>% filter(cumsum(grepl("CAN_REM_DT", unique_event))<1 |
                      n()==1)
 
 # count up transplants, deaths
-dim(table(df$PX_ID)) # 21100
-nrow(df_tx) # 15336
-df %>% filter(!is.na(time_until_death_after_delisting) | outcome==1) %>% distinct(PX_ID) %>% nrow() # 1313 - two extra bc of posttx deaths (outcome=1 then transplant=1)
+dim(table(df$PX_ID)) # 24516
+nrow(df_tx) # 16963
+df %>% filter(!is.na(time_until_death_after_delisting) | outcome==1) %>% distinct(PX_ID) %>% nrow() # 1928 - two extra bc of posttx deaths (outcome=1 then transplant=1)
 
 # look at people with t_start = t_stop
 df %>% filter(t_start==t_stop) %>%
@@ -145,7 +133,7 @@ df %>% filter(t_start==t_stop,n()!=1) %>%
 df = df %>%
   mutate(t_stop=ifelse(t_stop==0,1,t_stop)) %>%
   filter(t_start!=t_stop)
-dim(table(df$PX_ID)) # 21100
+dim(table(df$PX_ID)) # 24516
 
 # define period to group observations that occur within the same week
 # take first observation within each week
@@ -169,7 +157,7 @@ df_final = df %>% mutate(
   mutate(interval_start = seq(0, max(t_stop) - 7, by = 7),
                              interval_stop = interval_start + 7) %>%
   ungroup()
-df_final %>% filter(!is.na(time_until_death_after_delisting) | outcome==1) %>% distinct(PX_ID) %>% nrow() # 1313 - two extra bc of posttx deaths (outcome=1 then transplant=1)
+df_final %>% filter(!is.na(time_until_death_after_delisting) | outcome==1) %>% distinct(PX_ID) %>% nrow() # 1928 - two extra bc of posttx deaths (outcome=1 then transplant=1)
 
 df_final
 
@@ -343,15 +331,21 @@ df_final <- df_final %>%
 df_final = df_final %>% mutate(
   time_since_listing = interval_start
 )
+
+
+df_final = df_final %>% 
+  mutate(
+    current_date = as.Date(can_listing_dt) + interval_start
+      ) 
 ```
 
 
 # Save discrete time data
 ```{r}
 # check numbers
-dim(table(df_final$PX_ID)) # 21100
-table(df_final$transplant) # 15336
-df_final %>% filter(outcome==1 | !is.na(time_until_death_after_delisting)) %>% distinct(PX_ID) %>% nrow() # 1313
+dim(table(df_final$PX_ID)) # 24516
+table(df_final$transplant) # 16963
+df_final %>% filter(outcome==1 | !is.na(time_until_death_after_delisting)) %>% distinct(PX_ID) %>% nrow() # 1928
 table(df_final$interval_start < df_final$interval_stop)
 save("df_final", file =  "discrete_final_data.RData")
 ```
@@ -360,11 +354,8 @@ save("df_final", file =  "discrete_final_data.RData")
 
 ```{r}
 df %>% filter(PX_ID == 1511673)
+
 ```
-
-
-
-
 
 
 

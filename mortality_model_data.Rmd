@@ -8,16 +8,13 @@ date: "2024-06-24"
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 rm(list=ls())
-setwd("C:/Users/mhwhi/Downloads/uscrs_2.0")
 load("discrete_final_data.RData")
-load("df_intervals_setup.RData")
+load("C:/Users/mhwhi/Downloads/df_intervals_setup.RData")
 library(dplyr)
 library(splines)
 library(tidyr)
 library(ggplot2)
 
-# source functions.R
-source("functions.R")
 
 # recode outcome as 0 if patient received transplant
 ## want outcome to be an indicator of pretx death
@@ -26,24 +23,24 @@ df_final = df_final %>%
   mutate(any_tx=any(transplant==1)) %>%
   ungroup() %>%
   mutate(outcome = ifelse(any_tx,0,outcome))
-df_final %>% filter(outcome==1 | !is.na(time_until_death_after_delisting)) %>% distinct(PX_ID) %>% nrow() # 1311 - yay!
+df_final %>% filter(outcome==1 | !is.na(time_until_death_after_delisting)) %>% distinct(PX_ID) %>% nrow() # 1926 - yay!
+
+# date for end of interval
+df_final = df_final %>% mutate(
+  current_date_end = current_date + pmin(last_active_date - current_date, 7)
+)
 
 ```
 
 # Split data into training / testing sets
 ```{r}
-set.seed(123)
-center_ids_train <- sample(x = unique(df_final$CAN_LISTING_CTR_CD), 
-                           size = ceiling(0.7*length(unique(df_final$CAN_LISTING_CTR_CD))), 
-                           replace = F)
-df_final$train_test <-  'Test'
-df_final$train_test[df_final$CAN_LISTING_CTR_CD %in% center_ids_train] <- 'Train'
-
-train_data = df_final %>% filter(train_test == 'Train')
-test_data = df_final %>% filter(train_test == 'Test')
-train_data
+#temporally split training and testing sets
+train_data = df_final %>% filter(current_date >= "2019-01-01" & current_date_end <= "2022-12-31")
+test_data = df_final %>% filter(current_date_end >= "2023-01-01")
+train_data %>% select(PX_ID, current_date, interval_start)
 
 save(test_data, file = "mortality_model_test_data.RData")
+
 ```
 
 
@@ -378,6 +375,13 @@ with(combined_df,table(prob_no_tx==1,prob_no_tx_start==1))
 combined_df = combined_df %>% group_by(PX_ID, landmark) %>% mutate(
   sweight = cumprod(prob_no_tx_start)/(cumprod(prob_no_tx))
 )
+
+combined_df %>% select(PX_ID, interval_start, interval_stop, time_until_death_after_delisting, outcome) %>% filter(outcome == 1)
+
+combined_df
+```
+```{r}
+combined_df %>% select(PX_ID, interval_start, interval_stop, time_until_death_after_delisting, outcome) %>% filter(PX_ID == 1254863)
 ```
 
 ## Overall distribution of weights
@@ -390,6 +394,9 @@ combined_df %>% filter(is.na(weight)) %>%
   select(albumin,bilirubin,eGFR,sodium,BNP,BNP_NT_Pro,durable_LVAD,short_MCS_ever,status,cpo,api,papi) %>%
   ungroup() %>%
   distinct(PX_ID)
+
+
+
 ```
 
 ## Weight distributions by week within landmark
@@ -437,6 +444,26 @@ ggplot(combined_df %>% distinct(PX_ID,landmark),aes(2*(landmark-1))) +
        y="Sample size") +
   theme_bw()
 ```
+```{r}
+getHR <- function(model, vars, cov) {
+  # Extract the coefficients for the variable of interest
+  coef_var <- coef(model)[vars]
+  
+  # Compute the robust standard errors
+  robust_se <- sqrt(diag(cov)[vars])
+  
+  # Calculate the odds ratio (OR) by exponentiating the coefficients
+  hr <- exp(coef_var)
+  
+  # Calculate the 95% confidence intervals
+  lowCI <- exp(coef_var - 1.96 * robust_se)
+  highCI <- exp(coef_var + 1.96 * robust_se)
+  
+  # Return as a data frame with the OR and CIs
+  return(data.frame(hr = hr, lowCI = lowCI, highCI = highCI))
+}
+```
+
 
 ## Mortality model without weights
 ```{r}
@@ -452,7 +479,7 @@ library(sandwich)
 mortality_model_no_weights_VCOV = vcovCL(mortality_model_no_weights, cluster = ~ PX_ID)
 sqrt(diag(mortality_model_no_weights_VCOV))
 summary(mortality_model_no_weights)$coef[,"Std. Error"]
-
+library(survival)
 # summary with robust CIs
 mortality_model_no_weights_sum = do.call(rbind.data.frame,lapply(names(coef(mortality_model_no_weights)),function(var_interest) {
   bind_cols(var=var_interest,getHR(mortality_model_no_weights,vars=var_interest,cov=mortality_model_no_weights_VCOV))
@@ -528,20 +555,12 @@ mortality_model_sweights_sum = do.call(rbind.data.frame,lapply(names(coef(mortal
   bind_cols(var=var_interest,getHR(mortality_model_sweights,vars=var_interest,cov=mortality_model_sweights_VCOV))
 }))
 
-# add LVAD * labs
-mortality_model_sweights_int = glm(formula = as.formula(
-  outcome ~ 
-    (albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + sodium_at_start) * durable_LVAD_at_start + log(BNP_at_start + 1):as.character(BNP_NT_Pro_at_start) + as.character(BNP_NT_Pro_at_start) + short_mcs_ever_at_start), data = combined_df, weights = sweight, family = binomial)
-mortality_model_sweights_int_VCOV = vcovCL(mortality_model_sweights_int, cluster = ~ PX_ID)
-mortality_model_sweights_int_sum = do.call(rbind.data.frame,lapply(names(coef(mortality_model_sweights_int)),function(var_interest) {
-  bind_cols(var=var_interest,getHR(mortality_model_sweights_int,vars=var_interest,cov=mortality_model_sweights_int_VCOV))
-}))
-mortality_model_sweights_int_sum
-
 # compare unweighted and weighted
 plotdat = bind_rows(mortality_model_no_weights_sum %>% mutate(model="Unweighted"),
           mortality_model_weights_sum %>% mutate(model="Unstabilized Weights"),
           mortality_model_sweights_sum %>% mutate(model="Stabilized Weights"))
+plotdat
+mortality_model_weights_sum
 ggplot(plotdat %>% filter(var!="(Intercept)"),
        aes(x = log(hr), y = var, color = model)) +
   geom_point(position = position_dodge(width = 0.5)) +
@@ -617,28 +636,7 @@ ggplot(plotdat %>% filter(var!="(Intercept)"),
   # coord_cartesian(xlim=c(-1,1)) +
   theme_minimal()
 # in the bias-variance tradeoff, truncated stabilized weights seem to have too much bias, almost identical to unweighted
-```
 
-## Variable selection: MCS interactions
-```{r}
-## working w/ stabilized weights bc they have the correct distribution (mean of 1 at each timepoint) and optimal bias-variance tradeoff
-
-
-# AIC of mortality model w/ hemo: 4544
-AIC(mortality_model_sweights)
-
-# fit stabilized weighted mortality model w/ US-CRS 1.0 variables only
-
-# AIC: xx
-
-# look at US-CRS 1.0 variables by LVAD status
-
-# add interactions of LVAD w/ US-CRS 1.0 variables
-
-
-
-
-# add interactions of labs 
 ```
 
 ```{r}
@@ -693,7 +691,3 @@ ggplot(forest_df, aes(x = estimate, y = term, color = model)) +
 
 new_names
 ```
-
-
-
-
