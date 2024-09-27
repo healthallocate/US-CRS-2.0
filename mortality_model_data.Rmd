@@ -528,6 +528,16 @@ mortality_model_sweights_sum = do.call(rbind.data.frame,lapply(names(coef(mortal
   bind_cols(var=var_interest,getHR(mortality_model_sweights,vars=var_interest,cov=mortality_model_sweights_VCOV))
 }))
 
+# add LVAD * labs
+mortality_model_sweights_int = glm(formula = as.formula(
+  outcome ~ 
+    (albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + sodium_at_start) * durable_LVAD_at_start + log(BNP_at_start + 1):as.character(BNP_NT_Pro_at_start) + as.character(BNP_NT_Pro_at_start) + short_mcs_ever_at_start), data = combined_df, weights = sweight, family = binomial)
+mortality_model_sweights_int_VCOV = vcovCL(mortality_model_sweights_int, cluster = ~ PX_ID)
+mortality_model_sweights_int_sum = do.call(rbind.data.frame,lapply(names(coef(mortality_model_sweights_int)),function(var_interest) {
+  bind_cols(var=var_interest,getHR(mortality_model_sweights_int,vars=var_interest,cov=mortality_model_sweights_int_VCOV))
+}))
+mortality_model_sweights_int_sum
+
 # compare unweighted and weighted
 plotdat = bind_rows(mortality_model_no_weights_sum %>% mutate(model="Unweighted"),
           mortality_model_weights_sum %>% mutate(model="Unstabilized Weights"),
@@ -607,6 +617,28 @@ ggplot(plotdat %>% filter(var!="(Intercept)"),
   # coord_cartesian(xlim=c(-1,1)) +
   theme_minimal()
 # in the bias-variance tradeoff, truncated stabilized weights seem to have too much bias, almost identical to unweighted
+```
+
+## Variable selection: MCS interactions
+```{r}
+## working w/ stabilized weights bc they have the correct distribution (mean of 1 at each timepoint) and optimal bias-variance tradeoff
+
+
+# AIC of mortality model w/ hemo: 4544
+AIC(mortality_model_sweights)
+
+# fit stabilized weighted mortality model w/ US-CRS 1.0 variables only
+
+# AIC: xx
+
+# look at US-CRS 1.0 variables by LVAD status
+
+# add interactions of LVAD w/ US-CRS 1.0 variables
+
+
+
+
+# add interactions of labs 
 ```
 
 ```{r}

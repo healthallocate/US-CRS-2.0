@@ -57,6 +57,12 @@ dim(table(df$PX_ID)) # 21100
 table(df$transplant) # 15336
 table(df$outcome) # 3149 - includes posttx
 df %>% mutate(any_tx=any(transplant==1)) %>% ungroup() %>% filter(outcome==1,!any_tx) %>% nrow() # 1311 pretx deaths
+
+# when were the deaths?
+df %>% mutate(any_tx=any(transplant==1)) %>% ungroup() %>% filter(outcome==1,!any_tx) %>%
+  mutate(death_date = unique_date + days(t_stop - t_start)) %>%
+  select(PX_ID,unique_event,unique_date,t_start,t_stop,death_date) %>%
+  pull(death_date) %>% summary
 ```
 
 ## Identify candidates who were delisted
