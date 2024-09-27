@@ -8,17 +8,29 @@ date: "2024-06-06"
 ## Dataset can be constructed from the heart_pipeline_final.Rmd file
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+
+# Molly:
 setwd("C:/Users/mhwhi/Downloads")
 load("heart_post_policy (4).RData")
 df_cand_thor <- haven::read_sas('./pubsaf2403/cand_thor.sas7bdat')
+
+# Grace:
+# load("heart_post_policy.RData")
+# curr_data_release = "//srtr-fs-p01/SAF/External/Pub_SAF/saf2403_Q1/pubsaf2403"
+# df_cand_thor <- haven::read_sas(file.path(curr_data_release,'cand_thor.sas7bdat'))
+
 library(renv)
 library(dplyr)
 library(tidyr)
 library(lubridate)
 
+# change these variables to customize inclusion criteria - see heart_pipeline_final.rmd
+filter_date_start = mdy("01-01-2019")
+censor_date_end = mdy("12-31-2023")
+
 # Subset to cohort
-df2 <- subset(df, df$t_start == '0' & as.Date(df$unique_date) >= '2019-01-01' & 
-                as.Date(df$unique_date) <= '2022-12-31')
+df2 <- subset(df, df$t_start == '0' & as.Date(df$unique_date) >= filter_date_start & 
+                as.Date(df$unique_date) <= censor_date_end)
 postpolicy_id <- unique(df2$PX_ID)
 rm(df2)
 df <- df[which(df$PX_ID %in% postpolicy_id), ]
@@ -31,81 +43,67 @@ df = df %>% mutate(can_listing_dt = if_else(grepl("CAN_LISTING_DT", unique_event
 ## Censor candidates past December 31st, 2023
 ```{r}
 df = df  %>% 
-  filter(unique_date <= mdy("12-31-2023")) %>% 
+  filter(unique_date <= censor_date_end) %>% 
   group_by(PX_ID) %>%
   mutate(
-    t_stop = ifelse(row_number() == n() & t_stop - t_start >  mdy("12-31-2023") - as.Date(unique_date), t_start + mdy("12-31-2023") - as.Date(unique_date), t_stop)
+    need_to_censor = row_number() == n() & t_stop - t_start >  censor_date_end - as.Date(unique_date),
+    t_stop = ifelse(need_to_censor, t_start + censor_date_end - as.Date(unique_date), t_stop),
+    outcome = ifelse(need_to_censor, 0, outcome)
   )
+table(df$t_stop >= df$t_start)
 
+# some numbers
+dim(table(df$PX_ID)) # 21100
+table(df$transplant) # 15336
+table(df$outcome) # 3149 - includes posttx
+df %>% mutate(any_tx=any(transplant==1)) %>% ungroup() %>% filter(outcome==1,!any_tx) %>% nrow() # 1311 pretx deaths
+
+# when were the deaths?
+df %>% mutate(any_tx=any(transplant==1)) %>% ungroup() %>% filter(outcome==1,!any_tx) %>%
+  mutate(death_date = unique_date + days(t_stop - t_start)) %>%
+  select(PX_ID,unique_event,unique_date,t_start,t_stop,death_date) %>%
+  pull(death_date) %>% summary
 ```
 
 ## Identify candidates who were delisted
 ## Determine time to death / censor for these candidates
 ```{r}
+ # only one person with rows/death after removal
+df %>% filter(cumsum(cumsum(grepl("CAN_REM_DT", unique_event)))>1) %>% select(PX_ID,unique_event,outcome)
+
+# create delisting indicator
 df = df %>% mutate(
   delisting = ifelse(grepl("CAN_REM_DT", unique_event) & !grepl("REC_TX_DT", unique_event), 1, 0)
-) %>% mutate(
+)
+
+# similar to row from transplant to death/censoring, make one row from delisting to death
+df = df %>% group_by(PX_ID) %>%
+  mutate(delisting = cumsum(cumsum(delisting)),
+         t_stop = ifelse(delisting == 1, last(t_stop), t_stop),
+         outcome = ifelse(delisting == 1, last(outcome), outcome)) %>%
+  filter(delisting <= 1)
+
+# make time from delisting to death/censor
+df = df %>% mutate(
   time_until_death_after_delisting = ifelse(delisting == 1 & outcome == 1, t_stop - t_start, NA),
-  time_until_censor_after_delisting = ifelse(delisting == 1 & outcome == 0, t_stop - t_start, NA)) %>% group_by(PX_ID) %>% fill(time_until_death_after_delisting, time_until_censor_after_delisting, .direction = "up")
+  time_until_censor_after_delisting = ifelse(delisting == 1 & outcome == 0, censor_date_end - as.Date(unique_date), NA)) %>% group_by(PX_ID) %>% fill(time_until_death_after_delisting, time_until_censor_after_delisting, .direction = "up")
+
+# including posttx deaths in time_until_death_after_delisting? no
+df %>% filter(transplant==1,!is.na(time_until_death_after_delisting)) %>% nrow()
+
+# censoring anyone who dies? no
+df %>% filter(outcome==1,!is.na(time_until_censor_after_delisting)) %>% nrow()
+
+# count transplant, death, delisting
+df %>% ungroup() %>% count(transplant,delisting,outcome)
 
 ```
 
-
-
-
-## Discrete time data construction
-```{r}
-# create tx dataset
-# remove rows at time of transplant, removal
-df_tx = df %>% filter(transplant == 1 | CAN_REM_CD == 4)
-df = df %>% filter(!grepl("CAN_REM_DT", unique_event))
-
-
-# define period to group observations that occur within the same week
-# take first observation within each week
-# duplicate each observation based on how many days there are until the next period
-# define interval_start, interval_stop as the 7 day periods
-
-df_final = df %>% mutate(
-  period = ceiling(t_stop/7)
-) %>% group_by(PX_ID, period) %>% 
-  filter(row_number() == 1) %>% 
-  mutate(
-    t_start = ceiling(t_start/7)*7,
-    t_stop = ceiling(t_stop/7)*7, 
-    duplicates = (t_stop - t_start)/7
-  ) %>% ungroup() %>% uncount(duplicates) %>%
-  group_by(PX_ID) %>%
-  mutate(interval_start = seq(0, max(t_stop) - 7, by = 7),
-                             interval_stop = interval_start + 7) %>%
-  ungroup()
-
-df_final
-
-```
-
-
-
-
-
-
-## Set transplant = 1 for PX_ID in transplant list, at their last observation on the waitlist
-```{r}
-tx_patients = unique(df_tx$PX_ID)
-
-df_final = df_final %>% group_by(PX_ID) %>%
-  mutate(
-  transplant = ifelse(row_number() == n() & PX_ID %in% tx_patients, 1, 0)
-) %>% select(-c(t_start, t_stop, period, unique_event, unique_date)) %>% 
-  relocate(interval_start, interval_stop, .after=CAN_LISTING_CTR_CD)
-
-df_final %>% filter(PX_ID == 1310477) %>% select(PX_ID, transplant)
-```
 
 ## Define short term mcs ever variables
 ```{r}
 
-df_final <- df_final %>%
+df <- df %>%
   group_by(PX_ID) %>%
   
   mutate(ECMO_ever = case_when(ECMO == '1' ~ '1', TRUE ~ NA_character_),
@@ -123,10 +121,95 @@ df_final <- df_final %>%
 
 ```
 
+## Discrete time data construction
+```{r}
+# create tx dataset
+# remove rows at time of transplant, removal
+df_tx = df %>% filter(transplant == 1 | (CAN_REM_CD == 4 & grepl("CAN_REM_DT",unique_event)))
+df = df %>% filter(cumsum(grepl("CAN_REM_DT", unique_event))<1 |
+                     n()==1)
+
+# count up transplants, deaths
+dim(table(df$PX_ID)) # 21100
+nrow(df_tx) # 15336
+df %>% filter(!is.na(time_until_death_after_delisting) | outcome==1) %>% distinct(PX_ID) %>% nrow() # 1313 - two extra bc of posttx deaths (outcome=1 then transplant=1)
+
+# look at people with t_start = t_stop
+df %>% filter(t_start==t_stop) %>%
+  select(PX_ID,unique_event,unique_date,t_start,t_stop,death_time,outcome,transplant)
+df %>% filter(t_start==t_stop,n()!=1) %>%
+  select(PX_ID,unique_event,unique_date,t_start,t_stop,death_time,outcome,transplant)
+
+# recode t_stop as 1 if t_stop=0
+## otherwise, remove when t_start=t_stop
+df = df %>%
+  mutate(t_stop=ifelse(t_stop==0,1,t_stop)) %>%
+  filter(t_start!=t_stop)
+dim(table(df$PX_ID)) # 21100
+
+# define period to group observations that occur within the same week
+# take first observation within each week
+# duplicate each observation based on how many days there are until the next period
+  ## duplication causes some people to have outcome=1 multiple times, if the interval ending in death lasted >1 week
+# define interval_start, interval_stop as the 7 day periods
+
+df_final = df %>% mutate(
+  period = ceiling(t_stop/7)
+) %>% group_by(PX_ID, period) %>% 
+  # make outcome=1 for entire week if outcome=1
+  mutate(outcome = ifelse(sum(outcome)>0,1,outcome)) %>%
+  # taking the first row per week
+  filter(row_number() == 1) %>% 
+  mutate(
+    t_start = ceiling(t_start/7)*7,
+    t_stop = ceiling(t_stop/7)*7, 
+    duplicates = (t_stop - t_start)/7
+  ) %>% ungroup() %>% uncount(duplicates) %>%
+  group_by(PX_ID) %>%
+  mutate(interval_start = seq(0, max(t_stop) - 7, by = 7),
+                             interval_stop = interval_start + 7) %>%
+  ungroup()
+df_final %>% filter(!is.na(time_until_death_after_delisting) | outcome==1) %>% distinct(PX_ID) %>% nrow() # 1313 - two extra bc of posttx deaths (outcome=1 then transplant=1)
+
+df_final
+
+```
+
+
+# Data summary before imputation
+```{r}
+# to do:
+# we need to summarize missing data before imputation - add hemodynamics
+# also, might want to trim extreme values (to clinical cutoffs or percentiles like 99th)
+
+library(table1)
+table1(~  albumin + bilirubin + creatinine + sodium + 
+    factor(durable_LVAD) + factor(ECMO_ever), data=df_final) # very low percent missing except w/ BNP
+summary(df_final$BNP[df_final$BNP_NT_Pro %in% 0]) # should be between 0 and 20000
+summary(df_final$BNP[df_final$BNP_NT_Pro %in% 1]) # should be between 0 and 40000
+
+```
+
+
+
+## Set transplant = 1 for PX_ID in transplant list, at their last observation on the waitlist
+```{r}
+tx_patients = unique(df_tx$PX_ID)
+
+df_final = df_final %>% group_by(PX_ID) %>%
+  mutate(
+  transplant = ifelse(row_number() == n() & PX_ID %in% tx_patients, 1, 0)
+) %>% select(-c(t_start, t_stop, period, unique_event, unique_date)) %>% 
+  relocate(interval_start, interval_stop, .after=CAN_LISTING_CTR_CD)
+
+df_final %>% filter(PX_ID == 1310477) %>% select(PX_ID, transplant)
+```
+
+
 # Body surface area calculation
 ```{r}
 # select necessary cand thor variables
-df_cand_thor <- df_cand_thor %>% select(PX_ID, CAN_GENDER, CAN_RACE, CAN_HGT_CM, CAN_WGT_KG)
+df_cand_thor <- df_cand_thor %>% select(PX_ID, CAN_GENDER, CAN_RACE, CAN_HGT_CM, CAN_WGT_KG, CAN_ECMO)
 
 # impute missing height and weights
 df_cand_thor$CAN_HGT_CM[is.na(df_cand_thor$CAN_HGT_CM)] <-median(df_cand_thor$CAN_HGT_CM, na.rm=T)
@@ -134,7 +217,7 @@ df_cand_thor$CAN_WGT_KG[is.na(df_cand_thor$CAN_WGT_KG)] <-median(df_cand_thor$CA
 
 # define body surface area, merge with discrete time data
 df_cand_thor <- df_cand_thor %>%
-  mutate(bsa = 0.007184 * (CAN_HGT_CM ^ 0.425) * (CAN_WGT_KG ^ 0.725)) 
+  mutate(bsa = 0.007184 * (CAN_HGT_CM ^ 0.725) * (CAN_WGT_KG ^ 0.425)) 
 df_cand_thor <- df_cand_thor[!duplicated(df_cand_thor), ]
 df_final <- merge(df_final, df_cand_thor, by='PX_ID', all.x=T, all.y=F)
 
@@ -154,6 +237,10 @@ df_final <- df_final %>%
       is.na(HemoHemoglobin) & CAN_GENDER == 'M' ~ 14.9,
       is.na(HemoHemoglobin) & CAN_GENDER == 'F' ~ 13.3,
       TRUE ~ HemoHemoglobin
+    ),
+    BNP_NT_Pro = case_when(
+      is.na(BNP_NT_Pro) ~ 0,
+      TRUE ~ BNP_NT_Pro
     ),
     BNP = case_when(
       is.na(BNP) & BNP_NT_Pro == '0' ~ median(BNP[BNP_NT_Pro == '0'], na.rm = TRUE),
@@ -217,10 +304,14 @@ df_final <- df_final %>%
       (pmax((creatinine / 0.7), 1)^(-1.2)) * 0.9938^(age_at_listing) * 1.012,
     
     CAN_GENDER == 'M' & !is.na(creatinine) ~ 142 * (pmin((creatinine / 0.9), 1)^(-0.302)) *
-      (pmax((creatinine / 0.7), 1)^(-1.2)) * 0.9938^(age_at_listing)),
-      short_MCS_ever = 
-           case_when(ECMO_ever == '1' | temp_surg_ever == '1' | BiVAD_no_discharge_ever == '1' ~ 1,
-             TRUE ~ 0))
+      (pmax((creatinine / 0.9), 1)^(-1.2)) * 0.9938^(age_at_listing)),
+    short_MCS_ever_old = 
+         case_when(ECMO_ever == '1' | temp_surg_ever == '1' | BiVAD_no_discharge_ever == '1' ~ 1,
+           TRUE ~ 0),
+    short_MCS_ever = 
+         case_when(ECMO_ever == '1' | temp_surg_ever == '1' | BiVAD_no_discharge_ever == '1' | CAN_ECMO %in% 1 ~ 1,
+           TRUE ~ 0))
+with(df_final,table(short_MCS_ever_old,short_MCS_ever,useNA="ifany"))
 
 df_final %>% filter(is.na(creatinine))
 ```
@@ -257,6 +348,11 @@ df_final = df_final %>% mutate(
 
 # Save discrete time data
 ```{r}
+# check numbers
+dim(table(df_final$PX_ID)) # 21100
+table(df_final$transplant) # 15336
+df_final %>% filter(outcome==1 | !is.na(time_until_death_after_delisting)) %>% distinct(PX_ID) %>% nrow() # 1313
+table(df_final$interval_start < df_final$interval_stop)
 save("df_final", file =  "discrete_final_data.RData")
 ```
 
