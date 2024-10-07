@@ -10,9 +10,8 @@ date: "2024-06-06"
 knitr::opts_chunk$set(echo = TRUE)
 
 # Molly:
-setwd("C:/Users/mhwhi/Downloads")
-load("heart_post_policy (8).RData")
-df_cand_thor <- haven::read_sas('./pubsaf2403/cand_thor.sas7bdat')
+load("C:/Users/mhwhi/Downloads/heart_post_policy.RData")
+df_cand_thor <- haven::read_sas('C:/Users/mhwhi/Downloads/pubsaf2403/cand_thor.sas7bdat')
 
 # Grace:
 # load("heart_post_policy.RData")
@@ -23,6 +22,7 @@ library(renv)
 library(dplyr)
 library(tidyr)
 library(lubridate)
+library(table1)
 
 # change this variable to customize inclusion criteria - see heart_pipeline_final.rmd
 censor_date_end = mdy("12-31-2023")
@@ -162,19 +162,88 @@ df_final %>% filter(!is.na(time_until_death_after_delisting) | outcome==1) %>% d
 df_final
 
 ```
+# Missingness before out of range fix
+```{r}
+table1(~  albumin + bilirubin + creatinine + sodium + BNP + cardiac_output + diastolicBP + systolicBP + PCWP + PASP + PADP + central_venous_pressure +
+    factor(durable_LVAD) + factor(ECMO_ever), data=df_final)
+
+```
+
+
+```{r}
+#out of range value flag
+df_final = df_final %>% mutate(
+  out_of_range_flag = case_when(
+    sodium < 100 | sodium > 200 ~ 1,
+    BNP_NT_Pro == 0 & BNP > 20000 ~ 1,
+    BNP_NT_Pro == 1 & BNP > 40000 ~ 1,
+    bilirubin > 50 ~ 1,
+    albumin < 0.5 | albumin > 9.9 ~ 1,
+    cardiac_output < 0.2 | cardiac_output > 15 ~ 1,
+    diastolicBP > 110 ~ 1,
+    systolicBP < 10 | systolicBP > 300 ~ 1,
+    PCWP > 100 ~ 1,
+    PASP < 10 | PASP > 120 ~ 1,
+    PADP > 110 ~ 1,
+    central_venous_pressure > 110 ~ 1,
+    creatinine < 0.1 | creatinine > 40 ~ 1,
+    TRUE ~ 0)
+)
+
+#set out of range values to missing
+df_final = df_final %>% mutate(
+  sodium = ifelse(sodium < 100 | sodium > 200, NA, sodium),
+  BNP = case_when(
+    BNP_NT_Pro == 0 & BNP > 20000 ~ NA,
+    BNP_NT_Pro == 1 & BNP > 40000 ~ NA,
+    TRUE ~ BNP
+  ),
+  bilirubin = ifelse(bilirubin > 50, NA, bilirubin),
+  albumin = ifelse(albumin < 0.5 | albumin > 9.9, NA, albumin),
+  cardiac_output = ifelse(cardiac_output < 0.2 | cardiac_output > 15, NA, cardiac_output),
+  diastolicBP = ifelse(diastolicBP > 110, NA, diastolicBP),
+  systolicBP = ifelse(systolicBP < 10 | systolicBP > 300, NA, systolicBP),
+  PCWP = ifelse(PCWP > 100, NA, PCWP),
+  PASP = ifelse(PASP < 10 | PASP > 120, NA, PASP),
+  PADP = ifelse(PADP > 110, NA, PADP),
+  central_venous_pressure = ifelse(central_venous_pressure > 110, NA, central_venous_pressure),
+  creatinine = ifelse(creatinine < 0.1 | creatinine > 40, NA, creatinine)
+)
+
+```
+
+```{r}
+#add dates back into dataframe
+df_final = df_final %>% mutate(
+  last_wait_date = pmax(last_active_date, last_inactive_date, na.rm = T)
+) 
+df_final = df_final %>% 
+  mutate(
+    current_date = as.Date(can_listing_dt) + interval_start
+      ) %>% mutate(
+        current_date_end = current_date + pmin(last_wait_date - current_date, 7, na.rm = T)
+      )
+
+
+```
 
 
 # Data summary before imputation
 ```{r}
-# to do:
-# we need to summarize missing data before imputation - add hemodynamics
-# also, might want to trim extreme values (to clinical cutoffs or percentiles like 99th)
+#reduce data to cohort, create train/testing split
+table_data = df_final %>% 
+  filter(current_date >= "2019-01-01") %>% mutate(
+  train_test_split = ifelse(current_date_end < "2023-01-01", "train", "test")
+) %>% mutate(
+  train_test_split = as.factor(train_test_split)
+)
 
-library(table1)
-table1(~  albumin + bilirubin + creatinine + sodium + 
-    factor(durable_LVAD) + factor(ECMO_ever), data=df_final) # very low percent missing except w/ BNP
+
+table1(~  albumin + bilirubin + creatinine + sodium + BNP + cardiac_output + diastolicBP + systolicBP + PCWP + PASP + PADP + central_venous_pressure  + out_of_range_flag + 
+    factor(durable_LVAD) + factor(ECMO_ever) | train_test_split, data=table_data) # very low percent missing except w/ BNP
 summary(df_final$BNP[df_final$BNP_NT_Pro %in% 0]) # should be between 0 and 20000
 summary(df_final$BNP[df_final$BNP_NT_Pro %in% 1]) # should be between 0 and 40000
+
 
 ```
 
@@ -284,6 +353,8 @@ df_final <- df_final %>%
   )
 ```
 
+
+
 ## Calculate eGFR, define short mcs ever
 ```{r}
 df_final <- df_final %>%
@@ -301,7 +372,6 @@ df_final <- df_final %>%
            TRUE ~ 0))
 with(df_final,table(short_MCS_ever_old,short_MCS_ever,useNA="ifany"))
 
-df_final %>% filter(is.na(creatinine))
 ```
 ## Define hemodynamics, impute missing values
 ```{r}
@@ -326,18 +396,7 @@ df_final <- df_final %>%
 
 ```
 
-# Add time since waitlisting variable
-```{r}
-df_final = df_final %>% mutate(
-  time_since_listing = interval_start
-)
 
-
-df_final = df_final %>% 
-  mutate(
-    current_date = as.Date(can_listing_dt) + interval_start
-      ) 
-```
 
 
 # Save discrete time data
@@ -352,10 +411,9 @@ save("df_final", file =  "discrete_final_data.RData")
 
 
 
-```{r}
-df %>% filter(PX_ID == 1511673)
 
-```
+
+
 
 
 
