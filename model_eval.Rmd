@@ -1,0 +1,373 @@
+---
+title: "mortality model assessment"
+output: html_document
+date: "2024-07-15"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(haven)
+library(tidyr)
+library(purrr)
+library(riskRegression)
+library(survival)
+#retain only mortality model after running mortality_model_data file
+rm(list = setdiff(ls(), "mortality_model_sweights"))
+load("mortality_model_test_data.RData")
+```
+
+
+
+
+
+```{r}
+test_data = test_data %>% 
+  mutate(
+  week = interval_start / 7 + 1
+) %>% relocate(week, .after = CAN_LISTING_CTR_CD)
+
+
+```
+
+
+
+```{r}
+test_data = test_data %>% mutate(can_listing_dt = as.Date(can_listing_dt),
+                                               transplant_date = as.Date(transplant_date))
+
+
+#most recent date on waitlist
+test_data = test_data %>% mutate(
+  last_wait_date = pmax(last_active_date, last_inactive_date, na.rm = T)
+) 
+```
+
+
+
+
+
+```{r}
+# wait time determined by status
+test_data = test_data %>%
+  mutate(wait_time = case_when(
+    status == 1 ~ wait_1,
+    status == 2 ~ wait_2,
+    status == 3 ~ wait_3,
+    status == 4 ~ wait_4,
+    status == 5 ~ wait_5,
+    status == 6 ~ wait_6
+  ))
+
+
+test_data %>% select(last_active_date, status, current_date, wait_time, wait_1, wait_2, wait_3)
+```
+```{r}
+#start variables for the model testing
+test_data = test_data %>% mutate(
+  bilirubin_at_start = bilirubin,
+  albumin_at_start = albumin,
+  eGFR_at_start = eGFR,
+  BNP_NT_Pro_at_start = BNP_NT_Pro,
+  BNP_at_start = BNP,
+  sodium_at_start = sodium,
+  durable_LVAD_at_start = durable_LVAD,
+  short_mcs_ever_at_start = short_MCS_ever,
+  cpo_at_start = cpo,
+  api_at_start = api,
+  papi_at_start = papi
+)
+```
+
+
+```{r}
+# Time to event based on death, tx, or censoring
+
+test_data = test_data %>% mutate(
+  time_to_death = case_when(
+    !is.na(death_date_max) ~ death_date_max - current_date,
+    TRUE ~ NA
+  ),
+  death6week = case_when(
+    !is.na(time_to_death) & time_to_death <= 42 ~ 1,
+    TRUE ~ 0
+  ),
+  time_to_transplant = case_when(
+    any(transplant) == 1 ~ as.Date(transplant_date) - current_date,
+    TRUE ~ NA
+  )
+)
+
+test_data = test_data %>% mutate(
+  time = pmin(time_to_death, time_to_transplant, 42, na.rm=T)
+)
+
+
+test_data_actives = test_data %>% filter(status != "inactive")
+
+#make sure death6week captures all 6 week deaths
+test_data_actives %>% filter(death6week == 0 & death_date_max - current_date <= 42) %>% select(current_date, death_date_max, death6week, outcome, time_to_death, last_wait_date)
+
+first_int %>% select(CAN_REM_CD)
+```
+
+
+
+
+
+
+
+
+```{r}
+# Subset data at certain calendar dates
+# Calculate wait time at specific calendar date
+first_int = test_data_actives %>% 
+  filter(current_date <= "2023-01-01" & current_date > "2022-12-24") %>% 
+  mutate(int = 1,
+         wait_time = wait_time + as.numeric(as.Date("2023-01-01") - current_date)) 
+
+second_int = test_data_actives %>% 
+  filter(current_date <= "2023-02-15" & current_date > "2023-02-08") %>% 
+  mutate(int = 2,
+         wait_time = wait_time + as.numeric(as.Date("2023-02-15") - current_date))  
+
+third_int = test_data_actives %>% 
+  filter(current_date <= "2023-04-01" & current_date > "2023-03-25") %>% 
+  mutate(int = 3,
+         wait_time = wait_time + as.numeric(as.Date("2023-04-01") - current_date)) 
+
+fourth_int = test_data_actives %>% 
+  filter(current_date <= "2023-05-15" & current_date > "2023-05-08") %>% 
+  mutate(int = 4,
+         wait_time = wait_time + as.numeric(as.Date("2023-05-15") - current_date)) 
+
+fifth_int = test_data_actives %>% 
+  filter(current_date <= "2023-07-01" & current_date > "2023-06-24") %>% 
+  mutate(int = 5,
+         wait_time = wait_time + as.numeric(as.Date("2023-07-01") - current_date)) 
+
+sixth_int = test_data_actives %>% 
+  filter(current_date <= "2023-08-15" & current_date > "2023-08-08") %>% 
+  mutate(int = 6,
+         wait_time = wait_time + as.numeric(as.Date("2023-08-15") - current_date)) 
+
+seventh_int = test_data_actives %>% 
+  filter(current_date <= "2023-10-01" & current_date > "2023-09-24") %>% 
+  mutate(int = 7,
+         wait_time = wait_time + as.numeric(as.Date("2023-10-01") - current_date))  
+
+eighth_int = test_data_actives %>% 
+  filter(current_date <= "2023-11-15" & current_date > "2023-11-08") %>% 
+  mutate(int = 8,
+         wait_time = wait_time + as.numeric(as.Date("2023-11-15") - current_date)) 
+
+
+# Combine into dataset for pooled AUC
+eight_sets = rbind(first_int, second_int, third_int, fourth_int, fifth_int, sixth_int, seventh_int, eighth_int)
+
+```
+
+```{r}
+# Rank patients by statys and wait time
+# If status and wait time are the same, set the rank to be equal
+
+first_int = first_int %>% ungroup() %>% arrange(status, desc(wait_time)) %>% 
+  mutate(rank = row_number()) %>% 
+  group_by(status, wait_time) %>%
+  mutate(rank = first(rank))
+
+second_int = second_int %>% ungroup() %>% arrange(status, desc(wait_time)) %>% 
+  mutate(rank = row_number()) %>% 
+  group_by(status, wait_time) %>%
+  mutate(rank = first(rank))
+
+third_int = third_int %>% ungroup() %>% arrange(status, desc(wait_time)) %>% 
+  mutate(rank = row_number()) %>% 
+  group_by(status, wait_time) %>%
+  mutate(rank = first(rank))
+
+fourth_int = fourth_int %>% ungroup() %>% arrange(status, desc(wait_time)) %>% 
+  mutate(rank = row_number()) %>% 
+  group_by(status, wait_time) %>%
+  mutate(rank = first(rank))
+
+fifth_int = fifth_int %>% ungroup() %>% arrange(status, desc(wait_time)) %>% 
+  mutate(rank = row_number()) %>% 
+  group_by(status, wait_time) %>%
+  mutate(rank = first(rank))
+
+sixth_int = sixth_int %>% ungroup() %>% arrange(status, desc(wait_time)) %>% 
+  mutate(rank = row_number()) %>% 
+  group_by(status, wait_time) %>%
+  mutate(rank = first(rank))
+
+seventh_int = seventh_int %>% ungroup() %>% arrange(status, desc(wait_time)) %>% 
+  mutate(rank = row_number()) %>% 
+  group_by(status, wait_time) %>%
+  mutate(rank = first(rank))
+
+eighth_int = eighth_int %>% ungroup() %>% arrange(status, desc(wait_time)) %>% 
+  mutate(rank = row_number()) %>% 
+  group_by(status, wait_time) %>%
+  mutate(rank = first(rank))
+
+first_int %>% filter(status == 4) %>% arrange(desc(wait_time)) %>% select(PX_ID, status, wait_time, rank)
+```
+
+
+
+```{r}
+# Extract 6 week survival probability of our model
+first_int$status_predict = predict(mortality_model_sweights, newdata = first_int, type = "response")
+first_int$prob_surv_sweights = (1-first_int$status_predict)^6
+
+second_int$status_predict = predict(mortality_model_sweights, newdata = second_int, type = "response")
+second_int$prob_surv_sweights = (1-second_int$status_predict)^6
+
+third_int$status_predict = predict(mortality_model_sweights, newdata = third_int, type = "response")
+third_int$prob_surv_sweights = (1-third_int$status_predict)^6
+
+fourth_int$status_predict = predict(mortality_model_sweights, newdata = fourth_int, type = "response")
+fourth_int$prob_surv_sweights = (1-fourth_int$status_predict)^6
+
+fifth_int$status_predict = predict(mortality_model_sweights, newdata = fifth_int, type = "response")
+fifth_int$prob_surv_sweights = (1-fifth_int$status_predict)^6
+
+sixth_int$status_predict = predict(mortality_model_sweights, newdata = sixth_int, type = "response")
+sixth_int$prob_surv_sweights = (1-sixth_int$status_predict)^6
+
+seventh_int$status_predict = predict(mortality_model_sweights, newdata = seventh_int, type = "response")
+seventh_int$prob_surv_sweights = (1-seventh_int$status_predict)^6
+
+eighth_int$status_predict = predict(mortality_model_sweights, newdata = eighth_int, type = "response")
+eighth_int$prob_surv_sweights = (1-eighth_int$status_predict)^6
+
+
+```
+
+
+
+```{r}
+# Flip the predictors to be higher when the candidate is higher risk of death
+first_int = first_int %>% mutate(
+  rank = 1/rank,
+  prob_surv_sweights = 1 - prob_surv_sweights
+)
+second_int = second_int %>% mutate(
+  rank = 1/rank,
+  prob_surv_sweights = 1 - prob_surv_sweights
+)
+third_int = third_int %>% mutate(
+  rank = 1/rank,
+  prob_surv_sweights = 1 - prob_surv_sweights
+)
+fourth_int = fourth_int %>% mutate(
+  rank = 1/rank,
+  prob_surv_sweights = 1 - prob_surv_sweights
+)
+fifth_int = fifth_int %>% mutate(
+  rank = 1/rank,
+  prob_surv_sweights = 1 - prob_surv_sweights
+)
+sixth_int = sixth_int %>% mutate(
+  rank = 1/rank,
+  prob_surv_sweights = 1 - prob_surv_sweights
+)
+seventh_int = seventh_int %>% mutate(
+  rank = 1/rank,
+  prob_surv_sweights = 1 - prob_surv_sweights
+)
+eighth_int = eighth_int %>% mutate(
+  rank = 1/rank,
+  prob_surv_sweights = 1 - prob_surv_sweights
+)
+```
+
+
+
+
+
+```{r}
+# Function to calculate AUC using predicted probabilities directly
+calculate_auc = function(data, prob_column) {
+  auc_value <- Score(list(data[[prob_column]]), 
+                     formula = death6week ~ 1,  # Only the response variable
+                     data = data, 
+                     metrics = c("AUC"), 
+                     model = FALSE)  # Set model to FALSE
+  
+  # Extract AUC and CI
+  auc <- auc_value$AUC$score$AUC
+  ci_low <- auc_value$AUC$score$lower  # Lower CI
+  ci_high <- auc_value$AUC$score$upper # Upper CI
+  
+  return(c(AUC = auc, CI_Lower = ci_low, CI_Upper = ci_high))
+}
+
+# List of datasets
+datasets <- list(
+  first_int = first_int,
+  second_int = second_int,
+  third_int = third_int,
+  fourth_int = fourth_int,
+  fifth_int = fifth_int,
+  sixth_int = sixth_int,
+  seventh_int = seventh_int,
+  eighth_int = eighth_int
+)
+
+# Specify the column names for the predicted probabilities and rank
+prob_column_name <- "prob_surv_sweights"  # Column for first predictor
+rank_column_name <- "rank"  # Column for second predictor
+
+# Initialize a data frame to store results
+results <- data.frame(Model = character(), 
+                      AUC = numeric(), 
+                      CI_Lower = numeric(), 
+                      CI_Upper = numeric(),
+                      Predictor = character())  # To differentiate predictors
+
+# Loop through datasets and compute AUCs for both predictors
+for (i in seq_along(datasets)) {
+  data_name <- paste0("Model ", i)  # Set model name as Model 1, Model 2, etc.
+  data <- datasets[[i]]
+  
+  # Calculate AUC for prob_surv_sweights
+  auc_result_prob <- calculate_auc(data, prob_column_name)
+  results <- rbind(results, data.frame(Model = data_name, 
+                                        AUC = auc_result_prob["AUC"], 
+                                        CI_Lower = auc_result_prob["CI_Lower"], 
+                                        CI_Upper = auc_result_prob["CI_Upper"],
+                                        Predictor = "US-CRS 2.0"))
+  
+  # Calculate AUC for rank
+  auc_result_rank <- calculate_auc(data, rank_column_name)
+  results <- rbind(results, data.frame(Model = data_name, 
+                                        AUC = auc_result_rank["AUC"], 
+                                        CI_Lower = auc_result_rank["CI_Lower"], 
+                                        CI_Upper = auc_result_rank["CI_Upper"],
+                                        Predictor = "Status Quo"))
+}
+
+# Convert Model to a factor with specified levels for ordering
+results$Model <- factor(results$Model, levels = paste0("Model ", 1:8))
+dates = as.Date(c("2023-01-01", "2023-02-15", "2023-04-01", "2023-05-15", 
+                          "2023-07-01", "2023-08-15", "2023-10-01", "2023-11-15"))
+results$Date <- rep(dates, each = 2)
+
+
+# Plot AUC values with confidence intervals
+ggplot(results, aes(x = Date, y = AUC, ymin = CI_Lower, ymax = CI_Upper, color = Predictor)) +
+  geom_point() +
+  geom_line() +
+  geom_errorbar(alpha = 0.3) +
+  labs(title = "AUC Comparison 2023",
+       x = "Date",
+       y = "AUC Value") +
+  theme_minimal() +
+  scale_y_continuous(limits = c(0,1)) + 
+  scale_x_continuous(breaks = as.numeric(dates), 
+                     labels = c("1/1/2023", "2/15/2023", "4/1/2023", "5/15/2023", 
+                                "7/1/2023", "8/15/2023", "10/1/2023", "11/15/2023")) # Adjust x-axis formatting as needed
+```
+

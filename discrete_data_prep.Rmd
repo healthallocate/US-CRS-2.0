@@ -8,9 +8,8 @@ date: "2024-06-06"
 ## Dataset can be constructed from the heart_pipeline_final.Rmd file
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-
 # Molly:
-load("C:/Users/mhwhi/Downloads/heart_post_policy.RData")
+load("C:/Users/mhwhi/Downloads/heart_post_policy (8).RData")
 df_cand_thor <- haven::read_sas('C:/Users/mhwhi/Downloads/pubsaf2403/cand_thor.sas7bdat')
 
 # Grace:
@@ -23,6 +22,7 @@ library(dplyr)
 library(tidyr)
 library(lubridate)
 library(table1)
+library(purrr)
 
 # change this variable to customize inclusion criteria - see heart_pipeline_final.rmd
 censor_date_end = mdy("12-31-2023")
@@ -32,6 +32,22 @@ censor_date_end = mdy("12-31-2023")
 # Retain listing date, transplant date for waiting time calculations
 df = df %>% mutate(can_listing_dt = if_else(grepl("CAN_LISTING_DT", unique_event), unique_date, NA),
                    transplant_date = if_else(grepl("REC_TX_DT", unique_event), unique_date, NA)) %>% fill(can_listing_dt, transplant_date, .direction = "downup")
+
+
+df = df %>%
+  group_by(PX_ID, status) %>%  # Assuming PX_ID is the patient identifier
+  mutate(
+    status_start = as.Date(first(unique_date))
+  ) %>% mutate(
+    status_start_1 = if_else(status == 1, status_start, NA),
+    status_start_2 = if_else(status == 2, status_start, NA),
+    status_start_3 = if_else(status == 3, status_start, NA),
+    status_start_4 = if_else(status == 4, status_start, NA),
+    status_start_5 = if_else(status == 5, status_start, NA),
+    status_start_6 = if_else(status == 6, status_start, NA)
+  ) %>%
+  ungroup()
+
 ```
 
 ## Censor candidates past December 31st, 2023
@@ -396,6 +412,149 @@ df_final <- df_final %>%
 
 ```
 
+
+```{r}
+calculate_wait_times <- function(status_vector, current_date, status_start_1, status_start_2, status_start_3, status_start_4, status_start_5, status_start_6) {
+  n <- length(status_vector)
+  
+  # Convert to character if not already
+  status_vector <- as.character(status_vector)
+  
+  # Initialize wait time vectors
+  wait_1 <- numeric(n)
+  wait_2 <- numeric(n)
+  wait_3 <- numeric(n)
+  wait_4 <- numeric(n)
+  wait_5 <- numeric(n)
+  wait_6 <- numeric(n)
+  
+  # Flags to check if first time the status is encountered
+  first_time_1 <- TRUE
+  first_time_2 <- TRUE
+  first_time_3 <- TRUE
+  first_time_4 <- TRUE
+  first_time_5 <- TRUE
+  first_time_6 <- TRUE
+  
+  # Initialize cumulative wait times
+  cum_wait_1 <- 0
+  cum_wait_2 <- 0
+  cum_wait_3 <- 0
+  cum_wait_4 <- 0
+  cum_wait_5 <- 0
+  cum_wait_6 <- 0
+  
+  # Loop through each time point
+  for (i in 1:n) {
+    current_status <- status_vector[i]
+    
+    if (is.na(current_status) || current_status == "inactive") {
+      # Freeze wait times during inactive period, no accrual but keep the last values
+      wait_1[i] <- cum_wait_1
+      wait_2[i] <- cum_wait_2
+      wait_3[i] <- cum_wait_3
+      wait_4[i] <- cum_wait_4
+      wait_5[i] <- cum_wait_5
+      wait_6[i] <- cum_wait_6  # Ensure that the last value of wait_6 is retained
+    } else {
+      # Increment wait times only when the current status allows
+      
+      # Status 1 logic
+      if (current_status == "1") {
+        if (first_time_1) {
+          cum_wait_1 <- as.numeric(current_date[i] - status_start_1[i])
+          first_time_1 <- FALSE
+        } else {
+          cum_wait_1 <- cum_wait_1 + 7
+        }
+      }
+      
+      # Status 2 logic
+      if (current_status <= "2") {
+        if (first_time_2) {
+          cum_wait_2 <- as.numeric(current_date[i] - status_start_2[i])
+          first_time_2 <- FALSE
+        } else {
+          cum_wait_2 <- cum_wait_2 + 7
+        }
+      }
+      
+      # Status 3 logic
+      if (current_status <= "3") {
+        if (first_time_3) {
+          cum_wait_3 <- as.numeric(current_date[i] - status_start_3[i])
+          first_time_3 <- FALSE
+        } else {
+          cum_wait_3 <- cum_wait_3 + 7
+        }
+      }
+      
+      # Status 4 logic
+      if (current_status <= "4") {
+        if (first_time_4) {
+          cum_wait_4 <- as.numeric(current_date[i] - status_start_4[i])
+          first_time_4 <- FALSE
+        } else {
+          cum_wait_4 <- cum_wait_4 + 7
+        }
+      }
+      
+      # Status 5 logic
+      if (current_status <= "5") {
+        if (first_time_5) {
+          cum_wait_5 <- as.numeric(current_date[i] - status_start_5[i])
+          first_time_5 <- FALSE
+        } else {
+          cum_wait_5 <- cum_wait_5 + 7
+        }
+      }
+      
+      # Status 6 logic
+      if (current_status == "6") {  # Only accrue when status is exactly 6
+        if (first_time_6) {
+          cum_wait_6 <- as.numeric(current_date[i] - status_start_6[i])
+          first_time_6 <- FALSE
+        } else {
+          cum_wait_6 <- cum_wait_6 + 7
+        }
+      }
+      
+      # Assign cumulative wait times to the wait vectors
+      wait_1[i] <- cum_wait_1
+      wait_2[i] <- cum_wait_2
+      wait_3[i] <- cum_wait_3
+      wait_4[i] <- cum_wait_4
+      wait_5[i] <- cum_wait_5
+      wait_6[i] <- cum_wait_6
+    }
+  }
+  
+  # Return the wait time vectors as a data frame
+  data.frame(wait_1, wait_2, wait_3, wait_4, wait_5, wait_6)
+}
+
+
+
+df_final <- df_final %>%
+  group_by(PX_ID) %>%
+  do({
+    wait_times <- calculate_wait_times(
+      status_vector = as.character(.$status),
+      current_date = .$current_date,
+      status_start_1 = .$status_start_1,
+      status_start_2 = .$status_start_2,
+      status_start_3 = .$status_start_3,
+      status_start_4 = .$status_start_4,
+      status_start_5 = .$status_start_5,
+      status_start_6 = .$status_start_6
+    )
+    cbind(., wait_times)  # Combine the original dataframe with the new wait times
+  }) %>%
+  ungroup()  # Ungroup after processing
+
+# check that wait time freezes when inactive
+df_final  %>% select(PX_ID, status, interval_start, interval_stop, wait_1, wait_2, wait_3, wait_4, wait_5, wait_6)
+```
 
 
 
